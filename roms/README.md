@@ -1,0 +1,40 @@
+# System ROMs (U18 / U19)
+
+k8086 ships **rmDOS** clean-room XT system ROMs as the default BIOS
+(MIT; see root [LICENSE](../LICENSE) and [NOTICE](../NOTICE)):
+
+| File | Socket | Size | Linear address |
+|------|--------|------|----------------|
+| `u18.bin` | U18 | 32768 | `0xF8000–0xFFFFF` |
+| `u19.bin` | U19 | 8192 | `0xF6000–0xF7FFF` |
+
+Together they occupy `0xF6000–0xFFFFF` (40 KB). The 8088 reset vector at `0xFFFF0`
+is a far jump `JMP F000:E05B`. Cassette BASIC is intentionally omitted.
+
+Prebuilt images are committed so a standalone clone runs without the parent
+[rmDOS](https://github.com/Trugath/rmdos) tree. When developing both projects,
+rebuild from rmDOS (`make bios` / `make install-roms`) and copy here.
+
+## Changing the ROMs
+
+**CLI / env (single-instance emulator):**
+
+```bash
+export K8086_U18_ROM=/path/to/u18.bin
+export K8086_U19_ROM=/path/to/u19.bin
+./gradlew :k8086-emulator:run --args='disks/fd.img'
+```
+
+**Workstation (multi-VM):**
+
+- **New…** — after the hardware wizard, a System ROMs dialog defaults to
+  `roms/u18.bin` / `roms/u19.bin`. Browse to override for that VM only.
+- **Edit…** — available when the VM is **stopped**. Change the name and/or pick
+  new U18/U19 images; the host re-copies them into the VM’s ROM snapshots.
+
+Per-VM snapshots live under `~/.k8086/vms/<id>/roms/{u18,u19}.bin` and are stored
+as absolute paths in `vm.properties`. Those files are treated as immutable for the
+life of that definition until you Edit and replace them.
+
+See also [docs/architecture.md](../docs/architecture.md) for how
+`Machine` / `loadSystemRoms` maps the chips.

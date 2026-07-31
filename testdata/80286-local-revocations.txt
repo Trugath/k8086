@@ -1,0 +1,6 @@
+# Local revocations for SingleStepTests/80286 vectors we do not model.
+# IDIV byte overflow without #DE (AL=80h residue) — undocumented Harris 80C286 quirk
+0038b4bacfb75535b5da175f619b0812b16d0601
+de153d1e3812cdb2c9d25272844b4b28a5adc35f
+dce03c62813266bf0ba50e3325fa3898132cad1f
+38a27640b8a9475f75998d2cab801d51eb8bb0b2

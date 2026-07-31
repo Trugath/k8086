@@ -1,0 +1,10 @@
+[submodule "testdata/8086"]
+	path = testdata/8086
+	url = https://github.com/SingleStepTests/8086.git
+[submodule "testdata/8088"]
+	path = testdata/8088
+	url = https://github.com/SingleStepTests/8088.git
+	shallow = true
+[submodule "testdata/80286"]
+	path = testdata/80286
+	url = https://github.com/SingleStepTests/80286.git

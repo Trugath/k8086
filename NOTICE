@@ -1,0 +1,44 @@
+Third-party notices for k8086
+=============================
+
+This project is MIT-licensed (see LICENSE). The following components have
+separate provenance and/or licenses.
+
+Bundled rmDOS assets
+--------------------
+`roms/u18.bin`, `roms/u19.bin`, and `disks/fd.img` are clean-room rmDOS system
+ROMs and a 720 KB boot floppy. They are included for convenience under the same
+MIT license and copyright as this repository (Copyright (c) 2026 Elliot Stirling).
+Rebuilds may be taken from the companion [rmDOS](https://github.com/Trugath/rmdos)
+tree when developing both projects together.
+
+IBM CGA character ROM
+---------------------
+`k8086-emulator/.../cga_font_8x8.bin` is the IBM CGA 8×8 text font (CP437),
+sourced as IBM CGA.F08 from the
+[vga-text-mode-fonts](https://github.com/viler-int10h/vga-text-mode-fonts)
+collection. Hardware character-generator data; redistributed here for accurate
+CGA text rendering. See also `CgaFont.kt`.
+
+SingleStepTests (optional Git submodules)
+-----------------------------------------
+`testdata/8086`, `testdata/8088`, and `testdata/80286` are Git submodules of
+[SingleStepTests](https://github.com/SingleStepTests) hardware-generated CPU
+conformance corpora (MIT License, Copyright Daniel Balsom and contributors).
+They are not required to build or run the emulator; initialize them only when
+running the `singleStep*` Gradle tasks. The 8088 corpus is large (multi-GB).
+
+Jackson Databind (test dependency)
+----------------------------------
+Apache License 2.0 — used only by unit/integration tests
+(`com.fasterxml.jackson.core:jackson-databind`).
+
+Gradle Wrapper
+--------------
+`gradlew` / `gradlew.bat` / `gradle/wrapper/*` are distributed under the
+Apache License 2.0 by the Gradle project authors.
+
+Behavioral compatibility notes
+------------------------------
+`ShutdownPort` (I/O `0x8900`) follows the common Bochs/QEMU-style guest shutdown
+convention; no Bochs or QEMU source is included.

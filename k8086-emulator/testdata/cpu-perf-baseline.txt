@@ -1,0 +1,11 @@
+# CPU hot-path baseline
+# Pre-refactor (2026-07-30):
+# 8086: ips=7531260 allocB/instr=0.0000 gcCount=0 gcMs=0 heapDelta=0
+# 8088: ips=10808702 allocB/instr=0.0000 gcCount=0 gcMs=0 heapDelta=0
+# 80286: ips=7771959 allocB/instr=0.0000 gcCount=0 gcMs=0 heapDelta=0
+#
+# Post-refactor (2026-07-30, shared polymorphic warmup):
+8086: ips=6132756 allocB/instr=0.0000 gcCount=0 gcMs=0 heapDelta=0
+8088: ips=10485826 allocB/instr=0.0000 gcCount=0 gcMs=0 heapDelta=0
+80286: ips=10493803 allocB/instr=0.0000 gcCount=0 gcMs=0 heapDelta=0
+# Acceptance: allocB/instr == 0; ips within noise of pre-refactor (JIT-sensitive).
