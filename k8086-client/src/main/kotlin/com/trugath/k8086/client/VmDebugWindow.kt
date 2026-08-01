@@ -246,7 +246,7 @@ class VmDebugWindow(
             flagsLabel.text = "<html>Flags: ${formatFlags(state.flags)}<br>" +
                 "CS:IP=${hex16(state.cs)}:${hex16(state.ip)}&nbsp;&nbsp;linear=${hex20(state.linearCsIp)}</html>"
             val bytes = state.nextBytes.take(state.nextLength).joinToString(" ") { "%02X".format(it) }
-            nextInsnLabel.text = "Next (${state.nextLength}): $bytes" + if (state.halted) "  [HLT]" else ""
+            nextInsnLabel.text = "Next (${state.nextLength}): $bytes" + if (state.halted) "  (halted)" else ""
             statusLabel.text = "Instructions: ${state.instructionCount}" + if (paused) "  (paused)" else ""
         } else {
             statusLabel.text = "No CPU state"

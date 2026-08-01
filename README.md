@@ -38,6 +38,8 @@ Opens the manager: New → configure (wizard) → system ROMs → Start → Cons
 VM definitions persist under `~/.k8086/vms/` (immutable ROM snapshots under
 `vms/<id>/roms/`). Use **Edit…** while a VM is stopped to rename it or replace ROMs.
 
+Step-by-step with screenshots: [Getting started](docs/getting-started.md).
+
 ### Single-instance emulator
 
 Shipped assets are enough for a cold clone (no parent rmDOS tree required):
@@ -101,7 +103,14 @@ when creating/editing a VM in the workstation.
 
 ## Docs
 
-[docs/architecture.md](docs/architecture.md) — module map, multi-VM host, boot path, CPU/FPU.
+| Doc | Contents |
+|-----|----------|
+| [docs/getting-started.md](docs/getting-started.md) | First boot with the workstation UI |
+| [docs/manual.md](docs/manual.md) | Manager, wizard, console, debugger, networks |
+| [docs/architecture.md](docs/architecture.md) | Module map, multi-VM host, boot path, CPU/FPU |
+
+Screenshots under `docs/screenshots/` are refreshed with
+`./gradlew :k8086-app:docScreenshots`.
 
 ## Tests
 

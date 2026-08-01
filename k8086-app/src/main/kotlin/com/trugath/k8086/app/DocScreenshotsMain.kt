@@ -120,7 +120,9 @@ fun main(args: Array<String>) {
     waitForGuestBoot(host, vm.id, timeoutMs = 45_000)
 
     val console = edt {
-        VmConsoleWindow(host, vm.id, vm.name).also { it.isVisible = true }
+        VmConsoleWindow(host, vm.id, vm.name, onOpenDebug = {
+            // no-op during capture; Debug window is opened explicitly below
+        }).also { it.isVisible = true }
     }
     settle(800)
     captureWindow(console, File(outDir, "06-console.png"))

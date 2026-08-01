@@ -940,7 +940,7 @@ private class WizardDialog(
         if (report.warnings.isNotEmpty()) {
             val n = JOptionPane.showConfirmDialog(
                 this,
-                report.warnings.joinToString("\n") { "• ${it.message}" } + "\n\nStart anyway?",
+                report.warnings.joinToString("\n") { "• ${it.message}" } + "\n\n$finishButtonLabel anyway?",
                 "Configuration warnings",
                 JOptionPane.YES_NO_OPTION,
                 JOptionPane.WARNING_MESSAGE,
