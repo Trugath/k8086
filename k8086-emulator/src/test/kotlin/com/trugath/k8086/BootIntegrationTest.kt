@@ -48,6 +48,11 @@ class BootIntegrationTest {
                 val v = machine.pic.pendingVector()
                 if (v >= 0) { machine.pic.acknowledge(v); cpu.serviceInterrupt(v) }
                 steps++
+                // Idle at the DOS prompt often HLT-waits in BIOS INT 16h; still sample VRAM.
+                if (steps % 50_000L == 0L && screenText().any { it.contains("A:>") }) {
+                    reachedPrompt = true
+                    break
+                }
                 continue
             }
             // POST may stop at "ERROR (RESUME = F1 KEY)"; Machine injects F1 from CGA text.
@@ -65,22 +70,27 @@ class BootIntegrationTest {
             steps++
 
             // Check for the DOS prompt every so often (scanning VRAM each step is costly).
-            if (steps % 200_000L == 0L && screenText().any { it.contains("A:>") }) {
+            if (steps % 50_000L == 0L && screenText().any { it.contains("A:>") }) {
                 reachedPrompt = true
                 break
             }
         }
 
         val screen = screenText()
+        val promptOnScreen = screen.any { it.contains("A:>") }
         File("build").mkdirs()
         File("build/boot-screen.txt").writeText(
-            "steps=$steps reachedPrompt=$reachedPrompt final=" +
+            "steps=$steps reachedPrompt=$reachedPrompt promptOnScreen=$promptOnScreen final=" +
                 String.format("%04X:%04X", cpu.getReg16(REG_CS), cpu.getIp()) + "\n" +
                 "=== CGA text screen (80x25) ===\n" + screen.joinToString("\n") + "\n"
         )
 
         val joined = screen.joinToString("\n")
         assertTrue(joined.contains("rmDOS"), "kernel banner should appear; screen was:\n$joined")
-        assertTrue(reachedPrompt, "should reach the A:> DOS prompt; screen was:\n$joined")
+        // Assert final VRAM: early-exit sampling can race the last paint under guest FDC.
+        assertTrue(
+            reachedPrompt || promptOnScreen,
+            "should reach the A:> DOS prompt; screen was:\n$joined",
+        )
     }
 }

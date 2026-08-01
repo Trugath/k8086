@@ -13,9 +13,9 @@ enum class GraphicsAdapter {
 /**
  * Optional floppy disk controller (uPD765) plus zero or more drive images (A:–D:).
  *
- * By default INT 13h floppy is served by [com.trugath.k8086.storage.FloppyInt13]
- * (direct image I/O). Set [useInt13Shim] to false so the guest BIOS owns INT 13h
- * through the mapped FDC (DMA ch2 / IRQ6).
+ * By default the guest BIOS owns floppy INT 13h through the mapped FDC
+ * (DMA ch2 / IRQ6). Set [useInt13Shim] to true for the legacy host
+ * [com.trugath.k8086.storage.FloppyInt13] path (direct image I/O).
  */
 data class FloppyControllerConfig(
     val enabled: Boolean = true,
