@@ -693,7 +693,7 @@ private class WizardDialog(
 
     private fun buildReviewPage(): JPanel = JPanel(BorderLayout(8, 8)).also {
         it.border = EmptyBorder(8, 16, 8, 16)
-        it.add(JLabel("Review adapters, media, networks, and cards — then Start."), BorderLayout.NORTH)
+        it.add(JLabel("Review adapters, media, networks, and cards — then $finishButtonLabel."), BorderLayout.NORTH)
         it.add(JScrollPane(summaryArea), BorderLayout.CENTER)
     }
 

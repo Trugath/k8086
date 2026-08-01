@@ -243,7 +243,8 @@ class VmDebugWindow(
             setReg("DS", state.ds)
             setReg("IP", state.ip)
             setReg("FL", state.flags)
-            flagsLabel.text = "Flags: ${formatFlags(state.flags)}  CS:IP=${hex16(state.cs)}:${hex16(state.ip)}  linear=${hex20(state.linearCsIp)}"
+            flagsLabel.text = "<html>Flags: ${formatFlags(state.flags)}<br>" +
+                "CS:IP=${hex16(state.cs)}:${hex16(state.ip)}&nbsp;&nbsp;linear=${hex20(state.linearCsIp)}</html>"
             val bytes = state.nextBytes.take(state.nextLength).joinToString(" ") { "%02X".format(it) }
             nextInsnLabel.text = "Next (${state.nextLength}): $bytes" + if (state.halted) "  [HLT]" else ""
             statusLabel.text = "Instructions: ${state.instructionCount}" + if (paused) "  (paused)" else ""

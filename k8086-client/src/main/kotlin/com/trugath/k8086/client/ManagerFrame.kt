@@ -65,6 +65,8 @@ class ManagerFrame(
     private val metricsArea = JTextArea(8, 40).apply {
         isEditable = false
         font = Font(Font.MONOSPACED, Font.PLAIN, 12)
+        lineWrap = true
+        wrapStyleWord = true
     }
     private val openConsoles = mutableMapOf<VmId, VmConsoleWindow>()
     private val openDebugWindows = mutableMapOf<VmId, VmDebugWindow>()

@@ -107,7 +107,7 @@ fun main(args: Array<String>) {
             edt { manager.dispose() }
             host.close()
             println("Done (partial).")
-            return
+            exitProcess(0)
         }
 
     // Ensure a stopped VM before starting for a clean boot screenshot.
@@ -116,13 +116,13 @@ fun main(args: Array<String>) {
         settle(500)
     }
     host.startVm(vm.id)
-    println("  started VM '${vm.name}' — waiting for guest video…")
-    waitForConsoleFrame(host, vm.id, timeoutMs = 20_000)
+    println("  started VM '${vm.name}' — waiting for guest boot…")
+    waitForGuestBoot(host, vm.id, timeoutMs = 45_000)
 
     val console = edt {
         VmConsoleWindow(host, vm.id, vm.name).also { it.isVisible = true }
     }
-    settle(1_500)
+    settle(800)
     captureWindow(console, File(outDir, "06-console.png"))
     println("  06-console.png")
 
@@ -155,6 +155,8 @@ fun main(args: Array<String>) {
     }
     host.close()
     println("Done.")
+    // AWT keeps non-daemon threads alive; exit so Gradle can finish.
+    exitProcess(0)
 }
 
 private fun <T> edt(block: () -> T): T {
@@ -256,13 +258,22 @@ private fun buildNetworkEditCaptureDialog(owner: Window): JDialog {
     }
 }
 
-private fun waitForConsoleFrame(host: LocalHost, vmId: VmId, timeoutMs: Long) {
+private fun waitForGuestBoot(host: LocalHost, vmId: VmId, timeoutMs: Long) {
     val deadline = System.currentTimeMillis() + timeoutMs
+    var firstVideoAt = 0L
     while (System.currentTimeMillis() < deadline) {
         val frame = host.pollConsoleFrame(vmId)
-        if (frame != null && frame.argb.any { it != 0 && it != 0xFF000000.toInt() }) {
+        val metrics = host.metrics(vmId)
+        val lit = frame?.argb?.count { (it and 0xFFFFFF) != 0 } ?: 0
+        if (lit > 80 && firstVideoAt == 0L) {
+            firstVideoAt = System.currentTimeMillis()
+        }
+        val instructions = metrics?.instructionCount ?: 0L
+        // Prefer a post-POST screen: either enough guest work, or several seconds of video.
+        val videoAge = if (firstVideoAt == 0L) 0L else System.currentTimeMillis() - firstVideoAt
+        if (firstVideoAt != 0L && (instructions > 3_000_000L || videoAge > 12_000L) && lit > 200) {
             return
         }
-        settle(200)
+        settle(250)
     }
 }
