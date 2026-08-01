@@ -127,6 +127,7 @@ class HardDiskBootIntegrationTest {
                     imagePath = hd.absolutePath,
                     bootFromDisk = true,
                     useInt13Shim = false,
+                    useHostFixedDiskBios = true,
                 ),
             ),
         )
@@ -192,6 +193,7 @@ class HardDiskBootIntegrationTest {
                     cylinders = 100,
                     heads = 8,
                     sectorsPerTrack = 17,
+                    useHostFixedDiskBios = true,
                 ),
             ),
         )
