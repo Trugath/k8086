@@ -180,7 +180,7 @@ class ManagerFrame(
 
     private fun onNewVm() {
         val setup = try {
-            StartWizard.show(host.network())
+            StartWizard.show(host.network(), finishButtonLabel = "Create")
         } catch (t: Throwable) {
             JOptionPane.showMessageDialog(
                 this,

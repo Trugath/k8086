@@ -59,17 +59,23 @@ import javax.swing.filechooser.FileNameExtensionFilter
 
 /**
  * VM-style setup wizard: system adapters (graphics / FDC / HD controller / COM1),
- * virtual networks, drive media, ISA expansion cards, then Review → Start.
+ * virtual networks, drive media, ISA expansion cards, then Review → finish.
+ *
+ * @param finishButtonLabel label on the Review step (CLI uses "Start"; the
+ *   workstation New-VM flow uses "Create" because naming/ROMs still follow).
  */
 object StartWizard {
-    fun show(networks: com.trugath.k8086.protocol.NetworkApi? = null): MachineSetup? {
+    fun show(
+        networks: com.trugath.k8086.protocol.NetworkApi? = null,
+        finishButtonLabel: String = "Start",
+    ): MachineSetup? {
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
         } catch (_: Exception) {
         }
         var result: MachineSetup? = null
         val showDialog = Runnable {
-            val dialog = WizardDialog(networks)
+            val dialog = WizardDialog(networks, finishButtonLabel)
             dialog.isVisible = true
             result = dialog.result
             dialog.catalog.close()
@@ -81,6 +87,44 @@ object StartWizard {
             SwingUtilities.invokeAndWait(showDialog)
         }
         return result
+    }
+
+    /**
+     * Non-modal walk of every wizard page for documentation screenshots.
+     * Creates the dialog on the EDT; [onStep] runs on the calling thread after each page.
+     * Return false from [onStep] to stop early.
+     */
+    fun captureSteps(
+        networks: com.trugath.k8086.protocol.NetworkApi? = null,
+        finishButtonLabel: String = "Create",
+        onStep: (stepName: String, dialog: JDialog) -> Boolean,
+    ) {
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
+        } catch (_: Exception) {
+        }
+        lateinit var dialog: WizardDialog
+        SwingUtilities.invokeAndWait {
+            dialog = WizardDialog(networks, finishButtonLabel)
+            dialog.isModal = false
+            dialog.defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
+            dialog.isVisible = true
+        }
+        try {
+            for (step in WizardStep.entries) {
+                SwingUtilities.invokeAndWait {
+                    dialog.showStepForCapture(step.ordinal)
+                    dialog.toFront()
+                    dialog.repaint()
+                }
+                if (!onStep(step.name.lowercase(), dialog)) break
+            }
+        } finally {
+            SwingUtilities.invokeAndWait {
+                dialog.dispose()
+                dialog.catalog.close()
+            }
+        }
     }
 }
 
@@ -96,11 +140,12 @@ private enum class WizardStep(val title: String, val subtitle: String) {
     DRIVES("Drives", "Floppy and hard-disk media"),
     NETWORK("Network", "Virtual NAT networks (gateway / DHCP)"),
     CARDS("Expansion", "ISA plugin cards"),
-    REVIEW("Review", "Confirm configuration and start"),
+    REVIEW("Review", "Confirm configuration"),
 }
 
 private class WizardDialog(
     private val networks: com.trugath.k8086.protocol.NetworkApi?,
+    private val finishButtonLabel: String = "Start",
 ) : JDialog(null as JFrame?, "k8086 — Create Virtual Machine", true) {
     val catalog = CardCatalog().also { it.refresh() }
     var result: MachineSetup? = null
@@ -432,7 +477,7 @@ private class WizardDialog(
             "<li><b>Drives</b> — floppy / HD images</li>" +
             "<li><b>Expansion</b> — AdLib, EMS, and other ISA JARs</li>" +
             "</ul>" +
-            "<p>Nothing is applied until you click <b>Start</b> on Review.</p>" +
+            "<p>Nothing is applied until you click <b>$finishButtonLabel</b> on Review.</p>" +
             "</body></html>"))
         p.add(Box.createVerticalGlue())
     }
@@ -773,8 +818,13 @@ private class WizardDialog(
             }
         }
         backButton.isEnabled = stepIndex > 0
-        nextButton.text = if (step == WizardStep.REVIEW) "Start" else "Next"
+        nextButton.text = if (step == WizardStep.REVIEW) finishButtonLabel else "Next"
         if (step == WizardStep.REVIEW) refreshReview()
+    }
+
+    /** Used by [StartWizard.captureSteps] — skips forward validation. */
+    fun showStepForCapture(index: Int) {
+        showStep(index.coerceIn(0, steps.lastIndex))
     }
 
     private fun goTo(index: Int) {
