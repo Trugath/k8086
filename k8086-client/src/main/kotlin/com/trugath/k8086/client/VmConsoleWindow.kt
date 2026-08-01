@@ -1,5 +1,6 @@
 package com.trugath.k8086.client
 
+import com.trugath.k8086.chipset.XtCharScanCodes
 import com.trugath.k8086.protocol.ConsoleFrame
 import com.trugath.k8086.protocol.HostApi
 import com.trugath.k8086.protocol.VmId
@@ -8,8 +9,12 @@ import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Graphics
+import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.awt.image.BufferedImage
@@ -18,6 +23,7 @@ import javax.swing.JFileChooser
 import javax.swing.JFrame
 import javax.swing.JOptionPane
 import javax.swing.JPanel
+import javax.swing.SwingUtilities
 import javax.swing.Timer
 import javax.swing.UIManager
 import javax.swing.WindowConstants
@@ -51,6 +57,13 @@ class VmConsoleWindow(
                 XtScanCodes.makeCode(e)?.let { host.sendScanCode(vmId, it or 0x80) }
             }
         })
+        display.addMouseListener(object : MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) {
+                if (!SwingUtilities.isRightMouseButton(e)) return
+                pasteClipboard()
+            }
+        })
+        display.toolTipText = "Right-click to paste clipboard text"
         add(display, BorderLayout.CENTER)
         add(toolbar, BorderLayout.SOUTH)
         packToVideoAspect()
@@ -88,6 +101,31 @@ class VmConsoleWindow(
             (videoPref.width / 4).coerceAtLeast(160) + insets.left + insets.right,
             (videoPref.height / 4).coerceAtLeast(100) + toolbarH + insets.top + insets.bottom,
         )
+    }
+
+    private fun pasteClipboard() {
+        display.requestFocusInWindow()
+        try {
+            val clip = Toolkit.getDefaultToolkit().systemClipboard
+            if (!clip.isDataFlavorAvailable(DataFlavor.stringFlavor)) return
+            val text = clip.getData(DataFlavor.stringFlavor) as? String ?: return
+            if (text.isEmpty()) return
+            val codes = ArrayList<Int>(text.length * 4)
+            XtCharScanCodes.paste(text, codes::add)
+            if (codes.isEmpty()) return
+            var i = 0
+            val t = Timer(8) {
+                if (i >= codes.size) {
+                    (it.source as Timer).stop()
+                    return@Timer
+                }
+                host.sendScanCode(vmId, codes[i++])
+                if (i < codes.size) host.sendScanCode(vmId, codes[i++])
+            }
+            t.start()
+        } catch (_: Exception) {
+            // Clipboard busy / unsupported flavor — ignore.
+        }
     }
 
     private fun buildToolbar(): JPanel {

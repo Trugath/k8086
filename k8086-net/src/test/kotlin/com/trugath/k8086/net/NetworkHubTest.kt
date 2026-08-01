@@ -144,6 +144,47 @@ class NetworkHubTest {
         reg.close()
     }
 
+    @Test
+    fun dnsAQueryToGatewayGetsReply() {
+        val reg = NetworkRegistry(NetworkStore(temp))
+        val mac = byteArrayOf(0x52, 0x54, 0x00, 0xD0.toByte(), 0x53, 0x01)
+        val srcIp = byteArrayOf(10, 0, 2, 15)
+        val gwIp = byteArrayOf(10, 0, 2, 2)
+        val port = reg.attachNic("default", mac)
+        val latch = CountDownLatch(1)
+        var reply: ByteArray? = null
+        port.setReceiveHandler { frame ->
+            if (frame.size < 42) return@setReceiveHandler
+            val ethType = ((frame[12].toInt() and 0xFF) shl 8) or (frame[13].toInt() and 0xFF)
+            if (ethType != 0x0800) return@setReceiveHandler
+            val ihl = (frame[14].toInt() and 0x0F) * 4
+            if (frame[14 + 9].toInt() and 0xFF != 17) return@setReceiveHandler
+            val udpOff = 14 + ihl
+            val srcPort = ((frame[udpOff].toInt() and 0xFF) shl 8) or (frame[udpOff + 1].toInt() and 0xFF)
+            if (srcPort != 53) return@setReceiveHandler
+            val dns = frame.copyOfRange(udpOff + 8, frame.size)
+            if (dns.size >= 12 && (dns[2].toInt() and 0x80) != 0) {
+                reply = dns
+                latch.countDown()
+            }
+        }
+        port.sendFrame(buildDnsAQuery(mac, srcIp, gwIp, "localhost", id = 0xBEEF, srcPort = 0xC001))
+        assertTrue(latch.await(3, TimeUnit.SECONDS), "expected DNS A reply from gateway")
+        assertNotNull(reply)
+        val dns = reply!!
+        assertEquals(0xBE, dns[0].toInt() and 0xFF)
+        assertEquals(0xEF, dns[1].toInt() and 0xFF)
+        assertEquals(0, dns[3].toInt() and 0x0F) // NOERROR
+        assertTrue(((dns[6].toInt() and 0xFF) shl 8) or (dns[7].toInt() and 0xFF) >= 1)
+        // Last 4 bytes of first answer should be 127.0.0.1
+        assertEquals(127, dns[dns.size - 4].toInt() and 0xFF)
+        assertEquals(0, dns[dns.size - 3].toInt() and 0xFF)
+        assertEquals(0, dns[dns.size - 2].toInt() and 0xFF)
+        assertEquals(1, dns[dns.size - 1].toInt() and 0xFF)
+        port.close()
+        reg.close()
+    }
+
     private fun isDhcpOfferOrAck(frame: ByteArray): Boolean {
         if (frame.size < 282) return false
         val ethType = ((frame[12].toInt() and 0xFF) shl 8) or (frame[13].toInt() and 0xFF)
@@ -174,6 +215,31 @@ class NetworkHubTest {
             i += len
         }
         return false
+    }
+
+    private fun buildDnsAQuery(
+        sha: ByteArray,
+        srcIp: ByteArray,
+        dstIp: ByteArray,
+        name: String,
+        id: Int,
+        srcPort: Int,
+    ): ByteArray {
+        val labels = name.split('.').filter { it.isNotEmpty() }
+        val qname = ArrayList<Byte>()
+        for (lab in labels) {
+            qname += lab.length.toByte()
+            for (b in lab.toByteArray(Charsets.US_ASCII)) qname += b
+        }
+        qname += 0
+        val header = ByteArray(12)
+        header[0] = ((id ushr 8) and 0xFF).toByte()
+        header[1] = (id and 0xFF).toByte()
+        header[2] = 0x01
+        header[5] = 1
+        val dns = header + ByteArray(qname.size) { qname[it] } + byteArrayOf(0, 1, 0, 1)
+        val ipUdp = NetUtil.udpPacket(srcIp, dstIp, srcPort, 53, dns)
+        return NetUtil.ethFrame(NetUtil.GATEWAY_MAC, sha, 0x0800, ipUdp)
     }
 
     private fun buildArpRequest(sha: ByteArray, spa: ByteArray, tpa: ByteArray): ByteArray {

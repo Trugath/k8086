@@ -122,7 +122,7 @@ internal class HubNicPort(
             h(frame.copyOf())
         } else {
             synchronized(lock) {
-                if (rxQueue.size < 64) rxQueue.addLast(frame.copyOf())
+                if (rxQueue.size < 256) rxQueue.addLast(frame.copyOf())
             }
         }
     }

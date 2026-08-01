@@ -95,7 +95,7 @@ class Ne2000Core(
     fun receiveFrame(frame: ByteArray) {
         if (cr and CR_STP != 0) return
         synchronized(rxQueue) {
-            if (rxQueue.size < 32) rxQueue.addLast(frame.copyOf())
+            if (rxQueue.size < 256) rxQueue.addLast(frame.copyOf())
         }
         drainRx()
     }
@@ -191,15 +191,22 @@ class Ne2000Core(
         val startPage = pstart and 0xFF
         val stopPage = pstop and 0xFF
         if (stopPage <= startPage) return false
-        val next = ((curr and 0xFF) + 1).let { if (it >= stopPage) startPage else it }
-        // Need room: header page + payload pages
+        val ringPages = stopPage - startPage
         val total = 4 + frame.size
         val pagesNeeded = (total + 255) / 256
-        // Simplified: refuse if next would hit bnry
-        val bn = bnry and 0xFF
-        if (next == bn) return false
+        if (pagesNeeded >= ringPages) return false
 
         val headerPage = curr and 0xFF
+        val bn = bnry and 0xFF
+        // Free pages in the ring before BNRY (exclusive of BNRY).
+        val used = if (headerPage >= bn) {
+            headerPage - bn
+        } else {
+            headerPage + ringPages - bn
+        }
+        val free = ringPages - used
+        if (pagesNeeded >= free) return false
+
         val status = 0x01 // receive OK
         val nextPacket = ((headerPage + pagesNeeded).let { p ->
             var x = p

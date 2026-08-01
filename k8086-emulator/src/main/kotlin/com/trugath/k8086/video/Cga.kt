@@ -1,6 +1,7 @@
 package com.trugath.k8086.video
 
 import com.trugath.k8086.api.IoDevice
+import com.trugath.k8086.chipset.XtCharScanCodes
 import com.trugath.k8086.cpu.Emulator8086
 import com.trugath.k8086.cpu.REG_CS
 
@@ -10,8 +11,12 @@ import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Graphics
 import java.awt.GraphicsEnvironment
+import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.awt.image.BufferedImage
@@ -457,6 +462,13 @@ internal class Cga(
                         scanCodeFor(e)?.let { onKeyScanCode?.invoke(it or 0x80) }
                     }
                 })
+                p.addMouseListener(object : MouseAdapter() {
+                    override fun mousePressed(e: MouseEvent) {
+                        if (!SwingUtilities.isRightMouseButton(e)) return
+                        pasteClipboard(p)
+                    }
+                })
+                p.toolTipText = "Right-click to paste clipboard text"
                 val toolbar = buildToolbar(p)
                 val root = JPanel(BorderLayout()).apply {
                     add(p, BorderLayout.CENTER)
@@ -660,6 +672,34 @@ internal class Cga(
     private fun updateWindowTitle() {
         val w = window ?: return
         SwingUtilities.invokeLater { w.title = windowTitle() }
+    }
+
+    private fun pasteClipboard(focusTarget: JPanel) {
+        focusTarget.requestFocusInWindow()
+        val emit = onKeyScanCode ?: return
+        try {
+            val clip = Toolkit.getDefaultToolkit().systemClipboard
+            if (!clip.isDataFlavorAvailable(DataFlavor.stringFlavor)) return
+            val text = clip.getData(DataFlavor.stringFlavor) as? String ?: return
+            if (text.isEmpty()) return
+            // Pace injection so the guest INT 16 buffer (15 chars) is not flooded.
+            val codes = ArrayList<Int>(text.length * 4)
+            XtCharScanCodes.paste(text, codes::add)
+            if (codes.isEmpty()) return
+            var i = 0
+            val t = Timer(8) {
+                if (i >= codes.size) {
+                    (it.source as Timer).stop()
+                    return@Timer
+                }
+                // Emit one make/break pair per tick when possible.
+                emit(codes[i++])
+                if (i < codes.size) emit(codes[i++])
+            }
+            t.start()
+        } catch (_: Exception) {
+            // Clipboard busy / unsupported flavor — ignore.
+        }
     }
 
     // Map a Swing key event to an IBM XT (scan-code set 1) make code, or null if the

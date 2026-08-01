@@ -40,7 +40,7 @@ class Ne2000CoreTest {
         core.ioWrite(0x00, 0x0A) // remote read
         val out = ByteArray(6)
         for (i in 0 until 6) {
-            // PROM stores duplicated bytes; WispOS does `in ax` then takes AL of each word —
+            // PROM stores duplicated bytes; rmDOS NIC driver does `in ax` then takes AL of each word —
             // our 8-bit DATA returns one byte per read; skip duplicate by reading pairs.
             val lo = core.ioRead(0x10)
             core.ioRead(0x10) // duplicate

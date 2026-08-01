@@ -70,7 +70,9 @@ internal class UserspaceNatGateway(
         val proto = frame[14 + 9].toInt() and 0xFF
         val srcIp = frame.copyOfRange(14 + 12, 14 + 16)
         val dstIp = frame.copyOfRange(14 + 16, 14 + 20)
-        val payload = frame.copyOfRange(14 + ihl, frame.size)
+        val totalLen = ((frame[14 + 2].toInt() and 0xFF) shl 8) or (frame[14 + 3].toInt() and 0xFF)
+        val payloadEnd = (14 + totalLen).coerceAtMost(frame.size).coerceAtLeast(14 + ihl)
+        val payload = frame.copyOfRange(14 + ihl, payloadEnd)
 
         // DHCP to broadcast / gateway
         if (proto == 17 && payload.size >= 8) {
@@ -89,7 +91,16 @@ internal class UserspaceNatGateway(
         if (dstIp.contentEquals(gatewayIp)) {
             when (proto) {
                 1 -> handleIcmpToGateway(srcMac, srcIp, payload)
-                17 -> { /* ignore non-DHCP UDP to gateway */ }
+                17 -> {
+                    if (payload.size >= 8) {
+                        val dstPort = ((payload[2].toInt() and 0xFF) shl 8) or (payload[3].toInt() and 0xFF)
+                        val srcPort = ((payload[0].toInt() and 0xFF) shl 8) or (payload[1].toInt() and 0xFF)
+                        if (dstPort == 53) {
+                            handleDnsToGateway(srcMac, srcIp, srcPort, payload.copyOfRange(8, payload.size))
+                            return
+                        }
+                    }
+                }
                 6 -> { /* no TCP services on gateway yet */ }
             }
             return
@@ -101,6 +112,40 @@ internal class UserspaceNatGateway(
             17 -> handleUdpOutbound(srcMac, srcIp, dstIp, payload)
             6 -> handleTcpOutbound(srcMac, srcIp, dstIp, payload)
         }
+    }
+
+    private fun handleDnsToGateway(srcMac: ByteArray, srcIp: ByteArray, srcPort: Int, dns: ByteArray) {
+        val question = DnsMessages.parseQuery(dns) ?: return
+        if (question.type != 1 || question.clazz != 1) {
+            val nx = DnsMessages.buildNxDomain(dns, question)
+            emitDnsReply(srcMac, srcIp, srcPort, nx)
+            return
+        }
+        executor.execute {
+            try {
+                val addrs = InetAddress.getAllByName(question.name)
+                val v4 = addrs.firstOrNull { it.address.size == 4 }?.address
+                val reply = if (v4 != null) {
+                    DnsMessages.buildAResponse(dns, question, v4)
+                } else {
+                    DnsMessages.buildNxDomain(dns, question)
+                }
+                emitDnsReply(srcMac, srcIp, srcPort, reply)
+            } catch (_: Exception) {
+                emitDnsReply(srcMac, srcIp, srcPort, DnsMessages.buildNxDomain(dns, question))
+            }
+        }
+    }
+
+    private fun emitDnsReply(dstMac: ByteArray, dstIp: ByteArray, dstPort: Int, dnsPayload: ByteArray) {
+        val ipUdp = NetUtil.udpPacket(
+            srcIp = gatewayIp,
+            dstIp = dstIp,
+            srcPort = 53,
+            dstPort = dstPort,
+            payload = dnsPayload,
+        )
+        emitToLan(dstMac, NetUtil.ethFrame(dstMac, gatewayMac, 0x0800, ipUdp))
     }
 
     private fun handleIcmpToGateway(srcMac: ByteArray, srcIp: ByteArray, icmp: ByteArray) {
@@ -171,20 +216,36 @@ internal class UserspaceNatGateway(
         if (dataOffset < 20 || tcp.size < dataOffset) return
         val flags = tcp[13].toInt() and 0xFF
         val syn = flags and 0x02 != 0
+        val ackFlag = flags and 0x10 != 0
+        val seq = ((tcp[4].toInt() and 0xFF) shl 24) or
+            ((tcp[5].toInt() and 0xFF) shl 16) or
+            ((tcp[6].toInt() and 0xFF) shl 8) or
+            (tcp[7].toInt() and 0xFF)
+        val ackNum = ((tcp[8].toInt() and 0xFF) shl 24) or
+            ((tcp[9].toInt() and 0xFF) shl 16) or
+            ((tcp[10].toInt() and 0xFF) shl 8) or
+            (tcp[11].toInt() and 0xFF)
         val key = "${NetUtil.ipToString(srcIp)}:$srcPort-${NetUtil.ipToString(dstIp)}:$dstPort"
         val existing = tcpNats[key]
         if (existing == null) {
             if (!syn) return
-            val nat = TcpNat(srcMac, srcIp, srcPort, dstIp, dstPort)
+            val nat = TcpNat(srcMac, srcIp, srcPort, dstIp, dstPort, guestIsn = seq)
             tcpNats[key] = nat
             executor.execute { runTcpBridge(nat, key) }
-            // Synthesize SYN-ACK immediately after connect attempt starts in bridge
             return
         }
+        if (syn) return // ignore SYN retransmit while session lives
+
+        if (ackFlag) {
+            existing.ackedByGuest = ackNum
+        }
+
         // Deliver payload bytes to host socket
         if (tcp.size > dataOffset) {
+            val n = tcp.size - dataOffset
             try {
-                existing.socket?.getOutputStream()?.write(tcp, dataOffset, tcp.size - dataOffset)
+                existing.socket?.getOutputStream()?.write(tcp, dataOffset, n)
+                existing.bytesFromGuest += n
             } catch (_: Exception) {
             }
         }
@@ -197,21 +258,35 @@ internal class UserspaceNatGateway(
     private fun runTcpBridge(nat: TcpNat, key: String) {
         try {
             val sock = Socket()
+            sock.tcpNoDelay = true
+            // Small host RX buffer so the remote slows when the guest lags.
+            sock.receiveBufferSize = 16 * 1024
             sock.connect(InetSocketAddress(InetAddress.getByAddress(nat.remoteIp), nat.remotePort), 3000)
             nat.socket = sock
-            // SYN-ACK to guest
-            emitTcp(nat, flags = 0x12, seq = 1, ack = 1, payload = ByteArray(0))
-            val buf = ByteArray(2048)
+            // SYN-ACK: our ISN=1, ack = guest ISN + 1
+            emitTcp(nat, flags = 0x12, seq = 1, ack = nat.guestAck(), payload = ByteArray(0))
+            val buf = ByteArray(1024)
             val input = sock.getInputStream()
-            var seq = 1
+            // First data byte follows SYN (ISN=1) → seq 2
+            var seq = 2
             while (!closed.get() && !sock.isClosed) {
-                val n = input.read(buf)
+                // Wait for guest ACKs so the NE2000 RX ring is not flooded.
+                while (!closed.get() && !sock.isClosed &&
+                    seq - nat.ackedByGuest >= MAX_IN_FLIGHT
+                ) {
+                    Thread.sleep(2)
+                }
+                if (closed.get() || sock.isClosed) break
+                val room = MAX_IN_FLIGHT - (seq - nat.ackedByGuest)
+                if (room <= 0) continue
+                val want = minOf(buf.size, room)
+                val n = input.read(buf, 0, want)
                 if (n < 0) break
                 if (n == 0) continue
+                emitTcp(nat, flags = 0x18, seq = seq, ack = nat.guestAck(), payload = buf.copyOf(n))
                 seq += n
-                emitTcp(nat, flags = 0x18, seq = seq - n, ack = 1, payload = buf.copyOf(n))
             }
-            emitTcp(nat, flags = 0x11, seq = seq, ack = 1, payload = ByteArray(0)) // FIN+ACK
+            emitTcp(nat, flags = 0x11, seq = seq, ack = nat.guestAck(), payload = ByteArray(0)) // FIN+ACK
         } catch (_: Exception) {
             emitTcp(nat, flags = 0x14, seq = 0, ack = 0, payload = ByteArray(0)) // RST
         } finally {
@@ -254,6 +329,11 @@ internal class UserspaceNatGateway(
         emitToLan(nat.guestMac, NetUtil.ethFrame(nat.guestMac, gatewayMac, 0x0800, ip + tcp))
     }
 
+    companion object {
+        /** Max unacked payload bytes toward the guest (~few NE2000 RX frames). */
+        private const val MAX_IN_FLIGHT = 4 * 1024
+    }
+
     private class UdpNat(
         val guestMac: ByteArray,
         val guestIp: ByteArray,
@@ -274,9 +354,19 @@ internal class UserspaceNatGateway(
         val guestPort: Int,
         val remoteIp: ByteArray,
         val remotePort: Int,
+        val guestIsn: Int,
     ) {
         @Volatile
         var socket: Socket? = null
+        @Volatile
+        var bytesFromGuest: Int = 0
+        /** Highest ACK number observed from the guest (next expected host seq). */
+        @Volatile
+        var ackedByGuest: Int = 2
+
+        /** Next ACK value for packets toward the guest. */
+        fun guestAck(): Int = guestIsn + 1 + bytesFromGuest
+
         fun close() {
             try {
                 socket?.close()
