@@ -20,8 +20,8 @@ enum class GraphicsAdapter {
 data class FloppyControllerConfig(
     val enabled: Boolean = true,
     val driveImages: List<String> = emptyList(),
-    /** Legacy INT 13h shim (direct image I/O). Default true for back-compat. */
-    val useInt13Shim: Boolean = true,
+    /** Guest BIOS owns floppy INT 13h via FDC by default. Set true for legacy host shim. */
+    val useInt13Shim: Boolean = false,
 ) {
     init {
         require(driveImages.size <= ConfigValidator.MAX_FLOPPY_DRIVES) {
@@ -33,9 +33,10 @@ data class FloppyControllerConfig(
 /**
  * Optional XT fixed-disk controller (Xebec-style ports at [ioBase], IRQ5 / DMA3 by default).
  *
- * By default INT 13h is handled by [com.trugath.k8086.storage.FixedDiskBios] through the
- * [com.trugath.k8086.storage.Wd1003] port model. Set [useInt13Shim] to bypass the controller
- * and use the legacy host shim over the image file.
+ * INT 13h ownership (when [enabled]):
+ * - [useInt13Shim]=true → legacy [com.trugath.k8086.storage.HdInt13] (direct image I/O)
+ * - else if [useHostFixedDiskBios]=true → host [com.trugath.k8086.storage.FixedDiskBios]
+ * - else → guest Fixed Disk option ROM (C800:) owns INT 13h; Wd1003 stays mapped
  */
 data class HardDiskControllerConfig(
     val enabled: Boolean = false,
@@ -51,6 +52,13 @@ data class HardDiskControllerConfig(
     val dmaChannel: Int = 3,
     /** Force legacy INT 13h shim (direct image I/O, no Wd1003). */
     val useInt13Shim: Boolean = false,
+    /**
+     * Host Fixed Disk BIOS intercept (default). Set false so the guest C800 option ROM
+     * owns HD INT 13h while Wd1003 remains mapped.
+     */
+    val useHostFixedDiskBios: Boolean = true,
+    /** Optional path to Fixed Disk option ROM (default: roms/fdrom.bin beside U18). */
+    val fixedDiskRomPath: String? = null,
     /** Optional CHS overrides when auto-geometry from image size is wrong. */
     val cylinders: Int? = null,
     val heads: Int? = null,

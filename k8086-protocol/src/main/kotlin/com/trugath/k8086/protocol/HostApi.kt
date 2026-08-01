@@ -39,8 +39,8 @@ data class MotherboardSpec(
 data class FloppySpec(
     val enabled: Boolean = true,
     val driveImages: List<String> = emptyList(),
-    /** Legacy INT 13h shim; false → guest BIOS + FDC. Default true. */
-    val useInt13Shim: Boolean = true,
+    /** Guest FDC owns INT 13h by default. */
+    val useInt13Shim: Boolean = false,
 )
 
 data class HardDiskSpec(
@@ -53,6 +53,9 @@ data class HardDiskSpec(
     val irq: Int = 5,
     val dmaChannel: Int = 3,
     val useInt13Shim: Boolean = false,
+    /** Host FixedDiskBios intercept; false → guest C800 option ROM. Default true. */
+    val useHostFixedDiskBios: Boolean = true,
+    val fixedDiskRomPath: String? = null,
     val cylinders: Int? = null,
     val heads: Int? = null,
     val sectorsPerTrack: Int? = null,

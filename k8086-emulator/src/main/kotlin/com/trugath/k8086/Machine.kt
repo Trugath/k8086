@@ -5,6 +5,7 @@ import com.trugath.k8086.api.DmaChannel
 import com.trugath.k8086.api.IsaCard
 import com.trugath.k8086.api.NicPort
 import com.trugath.k8086.api.NullNicPort
+import com.trugath.k8086.api.MemoryRegion
 import com.trugath.k8086.bus.InterruptSource
 import com.trugath.k8086.bus.IoBus
 import com.trugath.k8086.chipset.Dma8237
@@ -53,6 +54,7 @@ import com.trugath.k8086.storage.Wd1003
 import com.trugath.k8086.video.Cga
 import com.trugath.k8086.video.FramebufferSnapshot
 import java.io.BufferedOutputStream
+import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
@@ -224,7 +226,11 @@ class Machine(
     } else null
 
     internal val fixedDiskBios: FixedDiskBios? =
-        if (options.hardDisk.enabled && !options.hardDisk.useInt13Shim && wd1003 != null) {
+        if (options.hardDisk.enabled &&
+            !options.hardDisk.useInt13Shim &&
+            options.hardDisk.useHostFixedDiskBios &&
+            wd1003 != null
+        ) {
             FixedDiskBios(cpu, wd1003)
         } else null
 
@@ -706,6 +712,7 @@ class Machine(
         stopReason = RunStopReason.NONE
         postResumeF1Pressed = false
         postResumePollCounter = 0L
+        floppyMediaHintsApplied = false
         watchingWarmBootCs = true
         warmBootPollCounter = 0
         pitTickDebt = 0
@@ -727,6 +734,7 @@ class Machine(
             cpu.setupBootDisks(floppies, hd, hardDiskBytes, hd2)
         }
         attachHdControllerImages()
+        mapFixedDiskOptionRom()
         synchronized(this) {
             claimedDiskPaths.clear()
             floppies.forEach { claimedDiskPaths.add(java.io.File(it).absolutePath) }
@@ -744,6 +752,68 @@ class Machine(
         val hdc = wd1003 ?: return
         hdc.attachImage(0, cpu.diskImage(0x80))
         hdc.attachImage(1, cpu.diskImage(0x81))
+    }
+
+    /**
+     * Map guest Fixed Disk option ROM at C800:0 when HD INT 13 is not host-owned.
+     * Patches drive geometry at ROM offset 0x700 from attached Wd1003 images.
+     */
+    private fun mapFixedDiskOptionRom() {
+        if (!options.hardDisk.enabled || options.hardDisk.useInt13Shim || options.hardDisk.useHostFixedDiskBios) {
+            return
+        }
+        val hdc = wd1003 ?: return
+        val romFile = resolveFixedDiskRomFile() ?: return
+        val bytes = romFile.readBytes().copyOf()
+        require(bytes.size >= 16 && (bytes[0].toInt() and 0xFF) == 0x55 && (bytes[1].toInt() and 0xFF) == 0xAA) {
+            "Fixed Disk ROM invalid: ${romFile.path}"
+        }
+        // Geometry table: 8 bytes at the XT default signature (306/4/17).
+        var geoOff = -1
+        for (i in 0 until bytes.size - 3) {
+            if ((bytes[i].toInt() and 0xFF) == 0x32 &&
+                (bytes[i + 1].toInt() and 0xFF) == 0x01 &&
+                (bytes[i + 2].toInt() and 0xFF) == 0x04 &&
+                (bytes[i + 3].toInt() and 0xFF) == 0x11
+            ) {
+                geoOff = i
+                break
+            }
+        }
+        if (geoOff < 0) geoOff = 0x700
+        fun patchDrive(drive: Int, base: Int) {
+            if (!hdc.drivePresent(drive)) return
+            if (base + 3 >= bytes.size) return
+            val g = hdc.geometry(drive)
+            bytes[base] = (g.cylinders and 0xFF).toByte()
+            bytes[base + 1] = ((g.cylinders shr 8) and 0xFF).toByte()
+            bytes[base + 2] = (g.heads and 0xFF).toByte()
+            bytes[base + 3] = (g.sectorsPerTrack and 0xFF).toByte()
+        }
+        patchDrive(0, geoOff)
+        patchDrive(1, geoOff + 4)
+        bytes[bytes.lastIndex] = 0
+        val sum = bytes.fold(0) { a, b -> (a + (b.toInt() and 0xFF)) and 0xFF }
+        bytes[bytes.lastIndex] = (-sum).toByte()
+        // Writable image: option ROM saves prior INT 13 vector and transfer state in-place.
+        cpu.memoryBus.map(MemoryRegion.Ram(0xC8000, bytes.size, bytes), "fdrom")
+    }
+
+    private fun resolveFixedDiskRomFile(): File? {
+        val configured = options.hardDisk.fixedDiskRomPath
+        if (!configured.isNullOrBlank()) {
+            val f = File(configured)
+            return f.takeIf { it.isFile }
+        }
+        val env = System.getenv("K8086_FDROM")
+        if (!env.isNullOrBlank()) {
+            val f = File(env)
+            if (f.isFile) return f
+        }
+        // Beside U18: .../roms/u18.bin → .../roms/fdrom.bin
+        val besideU18 = File(File(u18RomPath).parentFile, "fdrom.bin")
+        if (besideU18.isFile) return besideU18
+        return null
     }
 
     /** Cooperative stop; the run loop exits and [shutdown] runs from `finally`. */
@@ -865,8 +935,29 @@ class Machine(
      * @param fromStep when true, execution breakpoints are ignored so Step can leave a hit.
      * @return false if the machine should stop (decode failure / CS:IP == 0).
      */
+    private var floppyMediaHintsApplied = false
+
+    /** Publish 360K/720K media type into BDA 40:8B for guest AH=08 (image-size heuristic). */
+    private fun applyFloppyMediaHints() {
+        if (floppyMediaHintsApplied || !options.floppy.enabled) return
+        // Wait until POST has initialized the BDA (equipment word non-zero).
+        if (cpu.getMem(0x410) == 0 && cpu.getMem(0x411) == 0) return
+        fun typeFor(drive: Int): Int {
+            val img = cpu.diskImage(drive) ?: return 0
+            return when (img.length()) {
+                368640L -> 1 // 360K
+                737280L -> 3 // 720K
+                else -> 3
+            }
+        }
+        val t0 = typeFor(0)
+        if (t0 != 0) cpu.setMem(0x48B, t0)
+        floppyMediaHintsApplied = true
+    }
+
     private fun runOneIteration(fromStep: Boolean): Boolean {
         pollPostResumeF1()
+        applyFloppyMediaHints()
 
         if (cpu.nmiPending && cpu.serviceNmiIfPending()) {
             instructionsExecuted++

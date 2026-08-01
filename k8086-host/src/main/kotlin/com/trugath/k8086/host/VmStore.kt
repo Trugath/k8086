@@ -70,6 +70,8 @@ class VmStore(private val rootDir: File = defaultRoot()) {
         setProperty("hd.irq", def.hardDisk.irq.toString())
         setProperty("hd.dmaChannel", def.hardDisk.dmaChannel.toString())
         setProperty("hd.useInt13Shim", def.hardDisk.useInt13Shim.toString())
+        setProperty("hd.useHostFixedDiskBios", def.hardDisk.useHostFixedDiskBios.toString())
+        setProperty("hd.fixedDiskRomPath", def.hardDisk.fixedDiskRomPath.orEmpty())
         setProperty("hd.cylinders", def.hardDisk.cylinders?.toString().orEmpty())
         setProperty("hd.heads", def.hardDisk.heads?.toString().orEmpty())
         setProperty("hd.sectorsPerTrack", def.hardDisk.sectorsPerTrack?.toString().orEmpty())
@@ -123,7 +125,7 @@ class VmStore(private val rootDir: File = defaultRoot()) {
             floppy = FloppySpec(
                 enabled = bool("floppy.enabled", true),
                 driveImages = images,
-                useInt13Shim = bool("floppy.useInt13Shim", true),
+                useInt13Shim = bool("floppy.useInt13Shim", false),
             ),
             hardDisk = HardDiskSpec(
                 enabled = bool("hd.enabled"),
@@ -135,6 +137,8 @@ class VmStore(private val rootDir: File = defaultRoot()) {
                 irq = prop("hd.irq", "5").toIntOrNull() ?: 5,
                 dmaChannel = prop("hd.dmaChannel", "3").toIntOrNull() ?: 3,
                 useInt13Shim = bool("hd.useInt13Shim"),
+                useHostFixedDiskBios = bool("hd.useHostFixedDiskBios", true),
+                fixedDiskRomPath = prop("hd.fixedDiskRomPath").ifBlank { null },
                 cylinders = intOrNull("hd.cylinders"),
                 heads = intOrNull("hd.heads"),
                 sectorsPerTrack = intOrNull("hd.sectorsPerTrack"),
