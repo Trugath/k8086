@@ -53,10 +53,10 @@ data class HardDiskControllerConfig(
     /** Force legacy INT 13h shim (direct image I/O, no Wd1003). */
     val useInt13Shim: Boolean = false,
     /**
-     * Host Fixed Disk BIOS intercept (default). Set false so the guest C800 option ROM
+     * Host Fixed Disk BIOS intercept (opt-in). Default false: guest C800 option ROM
      * owns HD INT 13h while Wd1003 remains mapped.
      */
-    val useHostFixedDiskBios: Boolean = true,
+    val useHostFixedDiskBios: Boolean = false,
     /** Optional path to Fixed Disk option ROM (default: roms/fdrom.bin beside U18). */
     val fixedDiskRomPath: String? = null,
     /** Optional CHS overrides when auto-geometry from image size is wrong. */

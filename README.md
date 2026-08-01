@@ -57,8 +57,9 @@ port `0x8900` stops the run loop and exits 0.
 The wizard configures **motherboard options** (RAM size, software 8087, SW1 video),
 **system adapters** (CGA, floppy controller, hard-disk controller, COM1), and optional
 ISA JARs. The hard-disk controller maps classic XT resources (`0x320` / IRQ5 / DMA3)
-to a Xebec-style port model; INT 13h is handled by a host Fixed Disk BIOS through
-that controller (legacy direct-image shim still available for tests).
+to a Xebec-style port model; INT 13h is owned by the guest C800 Fixed Disk option
+ROM by default (host Fixed Disk BIOS opt-in via `--hd-int13-bios`; legacy
+direct-image shim still available for tests).
 
 Optional hard disk via CLI (creates a blank ~10 MB image if missing):
 

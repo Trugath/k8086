@@ -53,8 +53,8 @@ data class HardDiskSpec(
     val irq: Int = 5,
     val dmaChannel: Int = 3,
     val useInt13Shim: Boolean = false,
-    /** Host FixedDiskBios intercept; false → guest C800 option ROM. Default true. */
-    val useHostFixedDiskBios: Boolean = true,
+    /** Host FixedDiskBios intercept; false → guest C800 option ROM. Default false. */
+    val useHostFixedDiskBios: Boolean = false,
     val fixedDiskRomPath: String? = null,
     val cylinders: Int? = null,
     val heads: Int? = null,

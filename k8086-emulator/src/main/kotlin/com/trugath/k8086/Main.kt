@@ -71,10 +71,11 @@ private fun printUsage() {
     println("  --quiet          Suppress usage banner.")
     println("  --floppy-int13-shim     Host floppy INT 13h shim (default: guest FDC owns INT 13h).")
     println("  --no-floppy-int13-shim  Guest BIOS owns floppy INT 13h (FDC); same as default.")
-    println("  --no-hd-int13-bios      Guest C800 Fixed Disk ROM owns HD INT 13h; default is host FixedDiskBios.")
+    println("  --no-hd-int13-bios      Guest C800 Fixed Disk ROM owns HD INT 13h (default).")
+    println("  --hd-int13-bios [true]  Host FixedDiskBios owns HD INT 13h (opt-in).")
     println("  Run with no arguments for the setup wizard.")
     println("  Env K8086_FLOPPY_INT13_SHIM=1 enables the host floppy INT 13h shim.")
-    println("  Env K8086_HD_INT13_BIOS=0 also disables the host Fixed Disk BIOS.")
+    println("  Env K8086_HD_INT13_BIOS=1 enables the host Fixed Disk BIOS.")
 }
 
 private fun runSetup(u18: String, u19: String, setup: MachineSetup) {
@@ -166,7 +167,7 @@ internal data class CliArgs(
     val maxInstructions: Long = Long.MAX_VALUE,
     val turbo: Boolean = false,
     val floppyInt13Shim: Boolean = false,
-    val hdInt13Bios: Boolean = true,
+    val hdInt13Bios: Boolean = false,
 ) {
     val floppy: String? get() = floppies.firstOrNull()
 }
@@ -186,8 +187,8 @@ internal fun parseArgs(args: Array<String>): CliArgs {
         else -> false
     }
     var hdInt13Bios = when (System.getenv("K8086_HD_INT13_BIOS")?.lowercase()) {
-        "0", "false", "no", "off" -> false
-        else -> true
+        "1", "true", "yes", "on" -> true
+        else -> false
     }
     var positional = 0
     var i = 0
@@ -279,9 +280,16 @@ internal fun parseArgs(args: Array<String>): CliArgs {
             }
             a == "--hd-int13-bios" -> {
                 val v = args.getOrNull(i + 1)
-                    ?: throw IllegalArgumentException("--hd-int13-bios requires true/false")
-                hdInt13Bios = v == "1" || v.equals("true", ignoreCase = true)
-                i += 2
+                if (v != null && !v.startsWith("-") &&
+                    (v == "0" || v == "1" || v.equals("true", ignoreCase = true) ||
+                        v.equals("false", ignoreCase = true))
+                ) {
+                    hdInt13Bios = v == "1" || v.equals("true", ignoreCase = true)
+                    i += 2
+                } else {
+                    hdInt13Bios = true
+                    i += 1
+                }
             }
             a.startsWith("--hd-int13-bios=") -> {
                 val v = a.removePrefix("--hd-int13-bios=")

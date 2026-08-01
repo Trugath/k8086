@@ -30,7 +30,7 @@ New-VM wizard; definitions live under `~/.k8086/vms/`.
 
 - Default geometry: **306 cylinders × 4 heads × 17 SPT** (~10 MB, ST-412 style).
 - Enabling the HD controller maps an XT Fixed Disk Adapter (Xebec-style) at **`0x320` / IRQ5 / DMA3**.
-- Guest INT 13h for `DL ≥ 0x80` is handled by a host **Fixed Disk BIOS** that drives that controller (stand-in for the adapter option ROM at `C8000`). A legacy direct-image INT 13h shim remains available via `useInt13Shim`.
+- Guest INT 13h for `DL ≥ 0x80` is owned by the guest **C800 Fixed Disk option ROM** by default (`roms/fdrom.bin`). Opt into the host Fixed Disk BIOS with `--hd-int13-bios` / `K8086_HD_INT13_BIOS=1`. A legacy direct-image INT 13h shim remains available via `useInt13Shim`.
 - Prefix the HD path with `@` to boot from it (`DL=0x80` at reset).
 
 See [docs/architecture.md](../docs/architecture.md) for the full boot path.
