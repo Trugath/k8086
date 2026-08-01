@@ -4,5 +4,6 @@ plugins {
 
 allprojects {
     group = "com.trugath.k8086"
-    version = "1.0-SNAPSHOT"
+    // Override for releases: ./gradlew :k8086-app:distZip -PreleaseVersion=1.0.0
+    version = (findProperty("releaseVersion") as String?) ?: "1.0-SNAPSHOT"
 }

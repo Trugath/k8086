@@ -3,7 +3,6 @@ plugins {
 }
 
 group = "com.trugath.k8086.cards"
-version = "1.0-SNAPSHOT"
 
 repositories {
     mavenCentral()

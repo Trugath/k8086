@@ -1,6 +1,7 @@
 # k8086 user manual
 
-Reference for the multi-VM **workstation** (`./gradlew :k8086-app:run`). For a
+Reference for the multi-VM **workstation** (`run.bat` / `./run.sh` from a release
+zip, or `./gradlew :k8086-app:run` from source). For a
 first boot walkthrough, see [Getting started](getting-started.md).
 
 Persistence:

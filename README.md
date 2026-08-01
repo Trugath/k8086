@@ -12,9 +12,22 @@ VirtualBox-style manager UI.
 
 ## Prerequisites
 
-- JDK **21** (Gradle toolchain; foojay resolver can download it if needed)
+- JDK **21** (runtime for the packaged app; Gradle toolchain / foojay for building)
 - Linux / macOS / Windows with a display for the manager / CGA console
   (headless tests set `showVideo = false`)
+
+## Download (no Gradle)
+
+Prebuilt workstation zips are attached to
+[GitHub Releases](https://github.com/Trugath/k8086/releases):
+
+1. Install JDK 21+
+2. Download `k8086-*.zip`, unzip
+3. Run **`run.bat`** (Windows) or **`./run.sh`** (Linux / macOS)
+
+The zip includes jars, default rmDOS ROMs (`roms/`), and boot floppy
+(`disks/fd.img`). To publish a release from this repo, push a tag such as
+`v1.0.0` (CI builds the zip and attaches it to the release).
 
 ## Clone
 
@@ -39,6 +52,14 @@ VM definitions persist under `~/.k8086/vms/` (immutable ROM snapshots under
 `vms/<id>/roms/`). Use **Edit…** while a VM is stopped to rename it or replace ROMs.
 
 Step-by-step with screenshots: [Getting started](docs/getting-started.md).
+
+Package a zip for local use or manual upload to a GitHub Release:
+
+```bash
+./gradlew :k8086-app:distZip
+# → k8086-app/build/distributions/k8086-1.0-SNAPSHOT.zip
+./gradlew :k8086-app:distZip -PreleaseVersion=1.0.0
+```
 
 ### Single-instance emulator
 

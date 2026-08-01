@@ -7,20 +7,29 @@ shipped rmDOS ROMs + floppy.
 
 - JDK **21+**
 - A display (the manager and CGA console are Swing windows)
-- This repository cloned with `roms/u18.bin`, `roms/u19.bin`, and `disks/fd.img`
+
+### Option A — packaged zip (no Gradle)
+
+1. Download `k8086-*.zip` from
+   [GitHub Releases](https://github.com/Trugath/k8086/releases) and unzip.
+2. Run **`run.bat`** (Windows) or **`./run.sh`** (Linux / macOS).
+
+ROMs and `disks/fd.img` are already inside the zip.
+
+### Option B — from source
+
+Clone with `roms/u18.bin`, `roms/u19.bin`, and `disks/fd.img`:
 
 ```bash
 git clone https://github.com/Trugath/k8086.git
 cd k8086
+./gradlew :k8086-app:run
 ```
 
 ## Launch the workstation
 
-```bash
-./gradlew :k8086-app:run
-```
-
-The **k8086 Workstation** manager opens. VM definitions live under `~/.k8086/vms/`.
+After starting via the zip or Gradle, the **k8086 Workstation** manager opens.
+VM definitions live under `~/.k8086/vms/`.
 
 ![Workstation manager](screenshots/01-manager.png)
 

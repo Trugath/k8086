@@ -19,7 +19,49 @@ kotlin {
 }
 
 application {
+    applicationName = "k8086"
     mainClass.set("com.trugath.k8086.app.WorkstationMainKt")
+}
+
+// Relative roms/ and disks/ paths resolve from the process working directory.
+// Ensure start scripts (and double-clicked launches) run from the install root.
+tasks.named<CreateStartScripts>("startScripts") {
+    doLast {
+        windowsScript.writeText(
+            windowsScript.readText().replace(
+                ":execute\r\n@rem Setup the command line",
+                ":execute\r\ncd /d \"%APP_HOME%\"\r\n@rem Setup the command line",
+            ).replace(
+                ":execute\n@rem Setup the command line",
+                ":execute\ncd /d \"%APP_HOME%\"\n@rem Setup the command line",
+            ),
+        )
+        unixScript.writeText(
+            unixScript.readText().replace(
+                "# Determine the Java command to use to start the JVM.",
+                "cd \"\$APP_HOME\" || exit 1\n\n# Determine the Java command to use to start the JVM.",
+            ),
+        )
+    }
+}
+
+distributions {
+    main {
+        distributionBaseName.set("k8086")
+        contents {
+            from(rootProject.layout.projectDirectory) {
+                include("LICENSE", "NOTICE")
+            }
+            from(rootProject.layout.projectDirectory.dir("roms")) {
+                include("*.bin")
+                into("roms")
+            }
+            from(rootProject.layout.projectDirectory.dir("disks")) {
+                include("fd.img")
+                into("disks")
+            }
+        }
+    }
 }
 
 tasks.register<JavaExec>("docScreenshots") {
