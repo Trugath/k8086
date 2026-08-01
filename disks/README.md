@@ -4,6 +4,9 @@
 |------|-------------|
 | `fd.img` | rmDOS boot floppy (720 KB) used by integration tests and manual boots |
 
+Image-size heuristics set BDA `40:8B` for guest INT 13h AH=08: 360K→1, 1.2M→2,
+720K→3, 1.44M→4. Default `fd.img` remains 720 KB.
+
 MIT-licensed rmDOS image; see root [LICENSE](../LICENSE) and [NOTICE](../NOTICE).
 Committed for a standalone clone. When developing alongside
 [rmDOS](https://github.com/Trugath/rmdos), refresh with `make install-floppy` /

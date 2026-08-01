@@ -15,6 +15,8 @@ import com.trugath.k8086.chipset.Pic8259
 import com.trugath.k8086.chipset.Pit8253
 import com.trugath.k8086.chipset.Ppi8255
 import com.trugath.k8086.chipset.ShutdownPort
+import com.trugath.k8086.chipset.ScanCodeInjectPort
+import com.trugath.k8086.chipset.DiskChangeInjectPort
 import com.trugath.k8086.chipset.Uart8250
 import com.trugath.k8086.config.FloppyControllerConfig
 import com.trugath.k8086.config.GraphicsAdapter
@@ -376,6 +378,18 @@ class Machine(
         }
 
         ioBus.map(shutdownPort, listOf(ShutdownPort.PORT), owner = "shutdown-port")
+        ioBus.map(
+            ScanCodeInjectPort { code -> keyboard.enqueueScanCode(code) },
+            listOf(ScanCodeInjectPort.PORT),
+            owner = "scancode-inject",
+        )
+        fdc?.let { controller ->
+            ioBus.map(
+                DiskChangeInjectPort { controller.signalDiskChange() },
+                listOf(DiskChangeInjectPort.PORT),
+                owner = "disk-change-inject",
+            )
+        }
 
         wd1003?.let { hdc ->
             val base = options.hardDisk.ioBase
@@ -937,7 +951,7 @@ class Machine(
      */
     private var floppyMediaHintsApplied = false
 
-    /** Publish 360K/720K media type into BDA 40:8B for guest AH=08 (image-size heuristic). */
+    /** Publish floppy media type into BDA 40:8B for guest AH=08 (image-size heuristic). */
     private fun applyFloppyMediaHints() {
         if (floppyMediaHintsApplied || !options.floppy.enabled) return
         // Wait until POST has initialized the BDA (equipment word non-zero).
@@ -945,8 +959,10 @@ class Machine(
         fun typeFor(drive: Int): Int {
             val img = cpu.diskImage(drive) ?: return 0
             return when (img.length()) {
-                368640L -> 1 // 360K
-                737280L -> 3 // 720K
+                368640L -> 1 // 360K 5.25"
+                1228800L -> 2 // 1.2M 5.25" HD
+                737280L -> 3 // 720K 3.5"
+                1474560L -> 4 // 1.44M 3.5" HD
                 else -> 3
             }
         }
