@@ -84,4 +84,12 @@ class CliArgsCoverageTest {
         assertEquals(12345L, cli.maxInstructions)
         assertTrue(cli.quiet)
     }
+
+    @Test
+    fun parseArgsSupportsNoFloppyInt13Shim() {
+        val cli = parseArgs(arrayOf(TestAssets.FLOPPY_PATH, "--no-floppy-int13-shim", "--quiet"))
+        assertFalse(cli.floppyInt13Shim)
+        val on = parseArgs(arrayOf(TestAssets.FLOPPY_PATH, "--floppy-int13-shim=true"))
+        assertTrue(on.floppyInt13Shim)
+    }
 }

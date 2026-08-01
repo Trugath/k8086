@@ -69,7 +69,9 @@ private fun printUsage() {
     println("  --max-instructions N  Stop after N instructions (default: unlimited).")
     println("  --turbo          Free-run CPU (ignore realtime pacing); useful for fast boots.")
     println("  --quiet          Suppress usage banner.")
+    println("  --no-floppy-int13-shim  Guest BIOS owns floppy INT 13h (FDC); default is host shim.")
     println("  Run with no arguments for the setup wizard.")
+    println("  Env K8086_FLOPPY_INT13_SHIM=0 also disables the floppy INT 13h shim.")
 }
 
 private fun runSetup(u18: String, u19: String, setup: MachineSetup) {
@@ -97,7 +99,11 @@ private fun runCli(u18: String, u19: String, parsed: CliArgs): Int {
         exitOnClose = !parsed.headless,
         realtime = !parsed.headless,
         serialLogPath = parsed.serialLog,
-        floppy = FloppyControllerConfig(enabled = true, driveImages = parsed.floppies),
+        floppy = FloppyControllerConfig(
+            enabled = true,
+            driveImages = parsed.floppies,
+            useInt13Shim = parsed.floppyInt13Shim,
+        ),
         hardDisk = HardDiskControllerConfig(
             enabled = hdPath != null,
             imagePath = hdPath,
@@ -155,6 +161,7 @@ internal data class CliArgs(
     val cgaExpect: String? = null,
     val maxInstructions: Long = Long.MAX_VALUE,
     val turbo: Boolean = false,
+    val floppyInt13Shim: Boolean = true,
 ) {
     val floppy: String? get() = floppies.firstOrNull()
 }
@@ -169,6 +176,10 @@ internal fun parseArgs(args: Array<String>): CliArgs {
     var cgaExpect: String? = null
     var maxInstructions = Long.MAX_VALUE
     var turbo = false
+    var floppyInt13Shim = when (System.getenv("K8086_FLOPPY_INT13_SHIM")?.lowercase()) {
+        "0", "false", "no", "off" -> false
+        else -> true
+    }
     var positional = 0
     var i = 0
     while (i < args.size) {
@@ -238,6 +249,21 @@ internal fun parseArgs(args: Array<String>): CliArgs {
                 quiet = true
                 i += 1
             }
+            a == "--no-floppy-int13-shim" -> {
+                floppyInt13Shim = false
+                i += 1
+            }
+            a == "--floppy-int13-shim" -> {
+                val v = args.getOrNull(i + 1)
+                    ?: throw IllegalArgumentException("--floppy-int13-shim requires true/false")
+                floppyInt13Shim = v == "1" || v.equals("true", ignoreCase = true)
+                i += 2
+            }
+            a.startsWith("--floppy-int13-shim=") -> {
+                val v = a.removePrefix("--floppy-int13-shim=")
+                floppyInt13Shim = v == "1" || v.equals("true", ignoreCase = true)
+                i += 1
+            }
             a.startsWith("-") -> throw IllegalArgumentException("Unknown option: $a")
             positional == 0 && floppies.isEmpty() -> {
                 floppies += a
@@ -253,7 +279,10 @@ internal fun parseArgs(args: Array<String>): CliArgs {
         }
     }
     require(floppies.size <= 4) { "At most 4 floppy drives" }
-    return CliArgs(floppies, hardDisk, cards, headless, serialLog, quiet, cgaExpect, maxInstructions, turbo)
+    return CliArgs(
+        floppies, hardDisk, cards, headless, serialLog, quiet,
+        cgaExpect, maxInstructions, turbo, floppyInt13Shim,
+    )
 }
 
 internal fun parseCardSpec(spec: String): CardSpec {

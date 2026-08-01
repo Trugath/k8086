@@ -60,6 +60,7 @@ class VmStore(private val rootDir: File = defaultRoot()) {
         setProperty("enableCom1", def.enableCom1.toString())
         setProperty("floppy.enabled", def.floppy.enabled.toString())
         setProperty("floppy.images", def.floppy.driveImages.joinToString("\u0001"))
+        setProperty("floppy.useInt13Shim", def.floppy.useInt13Shim.toString())
         setProperty("hd.enabled", def.hardDisk.enabled.toString())
         setProperty("hd.imagePath", def.hardDisk.imagePath.orEmpty())
         setProperty("hd.secondImagePath", def.hardDisk.secondImagePath.orEmpty())
@@ -119,7 +120,11 @@ class VmStore(private val rootDir: File = defaultRoot()) {
                 GraphicsKind.valueOf(prop("graphics", GraphicsKind.CGA.name))
             }.getOrDefault(GraphicsKind.CGA),
             enableCom1 = bool("enableCom1", true),
-            floppy = FloppySpec(enabled = bool("floppy.enabled", true), driveImages = images),
+            floppy = FloppySpec(
+                enabled = bool("floppy.enabled", true),
+                driveImages = images,
+                useInt13Shim = bool("floppy.useInt13Shim", true),
+            ),
             hardDisk = HardDiskSpec(
                 enabled = bool("hd.enabled"),
                 imagePath = prop("hd.imagePath").ifBlank { null },

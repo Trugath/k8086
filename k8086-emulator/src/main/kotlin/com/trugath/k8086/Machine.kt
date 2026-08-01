@@ -166,8 +166,9 @@ class Machine(
         null
     }
     internal val fdc: Fdc765? = if (options.floppy.enabled) Fdc765(cpu, pic, dma) else null
-    /** Host INT 13h floppy path so 720K/1.44M images work with the 5160 BIOS. */
-    internal val floppyInt13: FloppyInt13? = if (options.floppy.enabled) FloppyInt13(cpu) else null
+    /** Host INT 13h floppy path (optional; guest BIOS uses FDC when shim is off). */
+    internal val floppyInt13: FloppyInt13? =
+        if (options.floppy.enabled && options.floppy.useInt13Shim) FloppyInt13(cpu) else null
     val keyboard = Keyboard(pic, ppi)
     val speaker = PcSpeaker(pit, ppi, enableAudio = options.resolvedEnableAudio())
     val uart: Uart8250? = if (options.enableCom1) Uart8250(pic) else null

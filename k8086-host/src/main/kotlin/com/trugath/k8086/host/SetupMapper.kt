@@ -40,6 +40,7 @@ object SetupMapper {
         floppy = FloppyControllerConfig(
             enabled = def.floppy.enabled,
             driveImages = def.floppy.driveImages,
+            useInt13Shim = def.floppy.useInt13Shim,
         ),
         hardDisk = HardDiskControllerConfig(
             enabled = def.hardDisk.enabled,
@@ -89,7 +90,11 @@ object SetupMapper {
             GraphicsAdapter.CGA -> GraphicsKind.CGA
         },
         enableCom1 = setup.enableCom1,
-        floppy = FloppySpec(setup.floppy.enabled, setup.floppy.driveImages),
+        floppy = FloppySpec(
+            enabled = setup.floppy.enabled,
+            driveImages = setup.floppy.driveImages,
+            useInt13Shim = setup.floppy.useInt13Shim,
+        ),
         hardDisk = HardDiskSpec(
             enabled = setup.hardDisk.enabled,
             imagePath = setup.hardDisk.imagePath,

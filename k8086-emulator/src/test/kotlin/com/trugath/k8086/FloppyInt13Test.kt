@@ -69,4 +69,30 @@ class FloppyInt13Test {
         machine.cpu.setReg8(REG_AH, 0x02)
         assertFalse(shim.handle())
     }
+
+    @Test
+    fun shimOffLeavesGuestInt13AndKeepsFdc() {
+        TestAssets.assumeRomsPresent()
+        val machine = Machine(
+            TestAssets.u18.absolutePath,
+            TestAssets.u19.absolutePath,
+            MachineOptions(
+                showVideo = false,
+                enableAudio = false,
+                exitOnClose = false,
+                realtime = false,
+                floppy = com.trugath.k8086.config.FloppyControllerConfig(
+                    enabled = true,
+                    useInt13Shim = false,
+                ),
+            ),
+        )
+        try {
+            assertEquals(null, machine.floppyInt13)
+            assertTrue(machine.fdc != null)
+            assertEquals(null, machine.cpu.hostServices.onInt13Floppy)
+        } finally {
+            machine.shutdown()
+        }
+    }
 }

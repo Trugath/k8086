@@ -39,6 +39,8 @@ data class MotherboardSpec(
 data class FloppySpec(
     val enabled: Boolean = true,
     val driveImages: List<String> = emptyList(),
+    /** Legacy INT 13h shim; false → guest BIOS + FDC. Default true. */
+    val useInt13Shim: Boolean = true,
 )
 
 data class HardDiskSpec(
