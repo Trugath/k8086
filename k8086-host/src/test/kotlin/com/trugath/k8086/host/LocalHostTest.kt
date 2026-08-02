@@ -52,6 +52,19 @@ class LocalHostTest {
     }
 
     @Test
+    fun materializeCopiesFdromBesideU18() {
+        val store = VmStore(temp)
+        host = LocalHost(store)
+        val id = VmId(UUID.randomUUID().toString())
+        val (u18Src, u19Src) = writeDummyRoms(temp)
+        File(u18Src.parentFile, "fdrom.bin").writeBytes(ByteArray(32) { 0x55 })
+        host!!.createVm(sampleDef(id, "fdrom-snap", u18Src.absolutePath, u19Src.absolutePath))
+        val snapFd = File(temp, "vms/${id.value}/roms/fdrom.bin")
+        assertTrue(snapFd.isFile, "fdrom.bin should be snapshotted beside U18/U19")
+        assertEquals(0x55.toByte(), snapFd.readBytes()[0])
+    }
+
+    @Test
     fun updateRomsResnapshotsWhenStopped() {
         val store = VmStore(temp)
         host = LocalHost(store)

@@ -49,6 +49,7 @@ import com.trugath.k8086.cpu.loadSystemRoms
 import com.trugath.k8086.cpu.setupBootDisks
 import com.trugath.k8086.isa.CardSpec
 import com.trugath.k8086.isa.IsaSlotLoader
+import com.trugath.k8086.protocol.SystemRomDefaults
 import com.trugath.k8086.storage.Fdc765
 import com.trugath.k8086.storage.FixedDiskBios
 import com.trugath.k8086.storage.FloppyInt13
@@ -863,9 +864,16 @@ class Machine(
             val f = File(env)
             if (f.isFile) return f
         }
-        // Beside U18: .../roms/u18.bin → .../roms/fdrom.bin
-        val besideU18 = File(File(u18RomPath).parentFile, "fdrom.bin")
-        if (besideU18.isFile) return besideU18
+        // Beside U18: .../roms/u18.bin → .../roms/fdrom.bin (VM snapshots include this)
+        val parent = File(u18RomPath).parentFile
+        if (parent != null) {
+            val besideU18 = File(parent, "fdrom.bin")
+            if (besideU18.isFile) return besideU18
+        }
+        // Workstation cwd default when an older VM snapshot omitted fdrom.
+        // Workstation cwd default when an older VM snapshot omitted fdrom.
+        val shipped = File(SystemRomDefaults.FDROM_RELATIVE)
+        if (shipped.isFile) return shipped
         return null
     }
 

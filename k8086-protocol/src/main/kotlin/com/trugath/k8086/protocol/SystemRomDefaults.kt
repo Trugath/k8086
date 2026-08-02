@@ -9,6 +9,8 @@ package com.trugath.k8086.protocol
 object SystemRomDefaults {
     const val U18_RELATIVE = "roms/u18.bin"
     const val U19_RELATIVE = "roms/u19.bin"
+    /** Guest Fixed Disk option ROM (C800:); resolved beside U18 or via [FDROM_RELATIVE]. */
+    const val FDROM_RELATIVE = "roms/fdrom.bin"
 
     fun resolve(getenv: (String) -> String? = System::getenv): Pair<String, String> {
         val u18 = getenv("K8086_U18_ROM") ?: U18_RELATIVE

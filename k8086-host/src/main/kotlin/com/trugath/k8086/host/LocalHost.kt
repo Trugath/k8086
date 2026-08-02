@@ -85,6 +85,8 @@ class LocalHost(
         val (u18, u19) = if (refresh) {
             VmRomSnapshots.materialize(store, definition.id, src18, src19)
         } else {
+            // Existing VMs may lack fdrom.bin (older snapshots); pull it in if available.
+            VmRomSnapshots.ensureFdrom(store, definition.id, hintBeside = src18)
             canon18.absolutePath to canon19.absolutePath
         }
         return definition.copy(u18RomPath = u18, u19RomPath = u19)

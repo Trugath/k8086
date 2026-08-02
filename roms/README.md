@@ -7,9 +7,12 @@ k8086 ships **rmDOS** clean-room XT system ROMs as the default BIOS
 |------|--------|------|----------------|
 | `u18.bin` | U18 | 32768 | `0xF8000–0xFFFFF` |
 | `u19.bin` | U19 | 8192 | `0xF6000–0xF7FFF` |
+| `fdrom.bin` | Fixed Disk option ROM | 2048 | `0xC8000` (when HD enabled) |
 
-Together they occupy `0xF6000–0xFFFFF` (40 KB). The 8088 reset vector at `0xFFFF0`
+Together U18+U19 occupy `0xF6000–0xFFFFF` (40 KB). The 8088 reset vector at `0xFFFF0`
 is a far jump `JMP F000:E05B`. Cassette BASIC is intentionally omitted.
+`fdrom.bin` is the guest Fixed Disk INT 13h option ROM; workstation VM snapshots
+copy it beside U18/U19 so HD-enabled guests can run `PARTEDIT` / `FORMAT C:`.
 
 Prebuilt images are committed so a standalone clone runs without the parent
 [rmDOS](https://github.com/Trugath/rmdos) tree. When developing both projects,
