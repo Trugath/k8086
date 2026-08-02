@@ -76,20 +76,34 @@ class LocalHost(
      */
     private fun withRomSnapshots(definition: VmDefinition): VmDefinition {
         val (canon18, canon19) = VmRomSnapshots.canonicalFiles(store, definition.id)
+        val canonFd = VmRomSnapshots.fdromFile(store, definition.id)
         val src18 = File(definition.u18RomPath)
         val src19 = File(definition.u19RomPath)
+        val srcFd = definition.hardDisk.fixedDiskRomPath?.trim()?.takeIf { it.isNotEmpty() }?.let(::File)
         val refresh = !VmRomSnapshots.sameFile(src18, canon18) ||
             !VmRomSnapshots.sameFile(src19, canon19) ||
             !canon18.isFile ||
-            !canon19.isFile
+            !canon19.isFile ||
+            (srcFd != null && !VmRomSnapshots.sameFile(srcFd, canonFd))
         val (u18, u19) = if (refresh) {
-            VmRomSnapshots.materialize(store, definition.id, src18, src19)
+            VmRomSnapshots.materialize(store, definition.id, src18, src19, sourceFdrom = srcFd)
         } else {
             // Existing VMs may lack fdrom.bin (older snapshots); pull it in if available.
-            VmRomSnapshots.ensureFdrom(store, definition.id, hintBeside = src18)
+            VmRomSnapshots.ensureFdrom(
+                store,
+                definition.id,
+                hintBeside = src18,
+                explicitSource = srcFd,
+            )
             canon18.absolutePath to canon19.absolutePath
         }
-        return definition.copy(u18RomPath = u18, u19RomPath = u19)
+        val fdSnap = VmRomSnapshots.fdromFile(store, definition.id)
+        val hd = if (fdSnap.isFile) {
+            definition.hardDisk.copy(fixedDiskRomPath = fdSnap.absolutePath)
+        } else {
+            definition.hardDisk.copy(fixedDiskRomPath = null)
+        }
+        return definition.copy(u18RomPath = u18, u19RomPath = u19, hardDisk = hd)
     }
 
     override fun deleteVm(id: VmId) {

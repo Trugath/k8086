@@ -60,12 +60,13 @@ import javax.swing.filechooser.FileNameExtensionFilter
 
 /**
  * Result of [StartWizard.show]: machine setup plus chosen system ROM sources.
- * Workstation snapshots copy U18/U19 (and fdrom beside them) into the VM directory.
+ * Workstation snapshots copy U18/U19/fdrom into the VM directory.
  */
 data class WizardResult(
     val setup: MachineSetup,
     val u18RomPath: String,
     val u19RomPath: String,
+    val fdromPath: String,
 )
 
 /**
@@ -76,6 +77,7 @@ data class WizardResult(
  *   workstation New-VM flow uses "Create").
  * @param defaultU18 initial U18 path (defaults to [SystemRomDefaults]).
  * @param defaultU19 initial U19 path.
+ * @param defaultFdrom initial Fixed Disk option ROM path.
  */
 object StartWizard {
     fun show(
@@ -83,6 +85,7 @@ object StartWizard {
         finishButtonLabel: String = "Start",
         defaultU18: String = SystemRomDefaults.resolve().first,
         defaultU19: String = SystemRomDefaults.resolve().second,
+        defaultFdrom: String = SystemRomDefaults.resolveFdrom(),
     ): WizardResult? {
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
@@ -90,7 +93,7 @@ object StartWizard {
         }
         var result: WizardResult? = null
         val showDialog = Runnable {
-            val dialog = WizardDialog(networks, finishButtonLabel, defaultU18, defaultU19)
+            val dialog = WizardDialog(networks, finishButtonLabel, defaultU18, defaultU19, defaultFdrom)
             dialog.isVisible = true
             result = dialog.result
             dialog.catalog.close()
@@ -114,6 +117,7 @@ object StartWizard {
         finishButtonLabel: String = "Create",
         defaultU18: String = SystemRomDefaults.resolve().first,
         defaultU19: String = SystemRomDefaults.resolve().second,
+        defaultFdrom: String = SystemRomDefaults.resolveFdrom(),
         onStep: (stepName: String, dialog: JDialog) -> Boolean,
     ) {
         try {
@@ -122,7 +126,7 @@ object StartWizard {
         }
         lateinit var dialog: WizardDialog
         SwingUtilities.invokeAndWait {
-            dialog = WizardDialog(networks, finishButtonLabel, defaultU18, defaultU19)
+            dialog = WizardDialog(networks, finishButtonLabel, defaultU18, defaultU19, defaultFdrom)
             dialog.isModal = false
             dialog.defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
             dialog.isVisible = true
@@ -152,7 +156,7 @@ private const val SIDEBAR_TEXT_SLACK = 16
 
 private enum class WizardStep(val title: String, val subtitle: String) {
     WELCOME("Welcome", "Create an IBM 5155 / XT virtual machine"),
-    ROMS("ROMs", "U18 / U19 system BIOS images"),
+    ROMS("ROMs", "U18 / U19 system BIOS and Fixed Disk option ROM"),
     SYSTEM("System", "Memory, 8087, and motherboard switches"),
     ADAPTERS("Adapters", "Graphics, serial, floppy & hard-disk controllers"),
     DRIVES("Drives", "Floppy and hard-disk media"),
@@ -166,6 +170,7 @@ private class WizardDialog(
     private val finishButtonLabel: String = "Start",
     defaultU18: String,
     defaultU19: String,
+    defaultFdrom: String,
 ) : JDialog(null as JFrame?, "k8086 — Create Virtual Machine", true) {
     val catalog = CardCatalog().also { it.refresh() }
     var result: WizardResult? = null
@@ -176,6 +181,7 @@ private class WizardDialog(
     // --- System ROMs ---
     private val u18Field = JTextField(defaultU18, 28)
     private val u19Field = JTextField(defaultU19, 28)
+    private val fdromField = JTextField(defaultFdrom, 28)
 
     // --- System (motherboard) ---
     private val cpuCombo = JComboBox(CpuModel.entries.map { it.label }.toTypedArray()).also {
@@ -497,7 +503,7 @@ private class WizardDialog(
         p.add(JLabel("<html><body style='width:460px'>" +
             "<p>Configure an IBM 5155 / XT the way you would set motherboard switches and cards:</p>" +
             "<ul>" +
-            "<li><b>ROMs</b> — U18 / U19 system BIOS (snapshotted into the VM)</li>" +
+            "<li><b>ROMs</b> — U18 / U19 BIOS and Fixed Disk option ROM (snapshotted into the VM)</li>" +
             "<li><b>System</b> — RAM size, 8087, initial video (SW1)</li>" +
             "<li><b>Adapters</b> — CGA, COM1, floppy &amp; hard-disk controllers</li>" +
             "<li><b>Drives</b> — floppy / HD images</li>" +
@@ -512,13 +518,20 @@ private class WizardDialog(
         p.add(sectionTitle("System BIOS (U18 / U19)"))
         p.add(JLabel("<html><body style='width:480px'>" +
             "Defaults are the shipped <b>rmDOS</b> clean-room XT ROMs. Browse to override for this VM. " +
-            "Images are copied into the VM as immutable snapshots; <code>fdrom.bin</code> beside U18 " +
-            "is included automatically when present (needed for hard-disk INT 13h)." +
+            "Images are copied into the VM as immutable snapshots." +
             "</body></html>").also { it.alignmentX = LEFT_ALIGNMENT })
         p.add(Box.createVerticalStrut(12))
         p.add(romPathRow("U18 ROM (32 KB):", u18Field))
         p.add(Box.createVerticalStrut(8))
         p.add(romPathRow("U19 ROM (8 KB):", u19Field))
+        p.add(Box.createVerticalStrut(16))
+        p.add(sectionTitle("Fixed Disk option ROM (C800:)"))
+        p.add(JLabel("<html><body style='width:480px'>" +
+            "Guest INT 13h for hard disks when the HD controller is enabled. " +
+            "Default is <code>roms/fdrom.bin</code>; required for <code>PARTEDIT</code> / <code>FORMAT C:</code>." +
+            "</body></html>").also { it.alignmentX = LEFT_ALIGNMENT })
+        p.add(Box.createVerticalStrut(8))
+        p.add(romPathRow("FD ROM (2 KB):", fdromField))
         p.add(Box.createVerticalStrut(12))
         p.add(JButton("Restore shipped defaults").also { b ->
             b.alignmentX = LEFT_ALIGNMENT
@@ -526,6 +539,7 @@ private class WizardDialog(
                 val (u18, u19) = SystemRomDefaults.resolve()
                 u18Field.text = u18
                 u19Field.text = u19
+                fdromField.text = SystemRomDefaults.resolveFdrom()
             }
         })
         p.add(Box.createVerticalGlue())
@@ -858,6 +872,7 @@ private class WizardDialog(
                 ioBase = parseHexField(hdIoField.text, 0x320),
                 irq = hdIrqSpinner.value as Int,
                 dmaChannel = hdDmaSpinner.value as Int,
+                fixedDiskRomPath = fdromField.text.trim().ifEmpty { null },
             ),
             cards = cardRows.map {
                 CardSelection(it.entry.jarPath, it.entry.factory, it.enabled.isSelected, it.configValues())
@@ -918,19 +933,20 @@ private class WizardDialog(
             WizardStep.ROMS -> {
                 val u18 = u18Field.text.trim()
                 val u19 = u19Field.text.trim()
-                if (u18.isEmpty() || u19.isEmpty()) {
+                val fdrom = fdromField.text.trim()
+                if (u18.isEmpty() || u19.isEmpty() || fdrom.isEmpty()) {
                     JOptionPane.showMessageDialog(
                         this,
-                        "Both U18 and U19 ROM paths are required.",
+                        "U18, U19, and Fixed Disk ROM paths are required.",
                         "System ROMs",
                         JOptionPane.WARNING_MESSAGE,
                     )
                     return false
                 }
-                if (!File(u18).isFile || !File(u19).isFile) {
+                if (!File(u18).isFile || !File(u19).isFile || !File(fdrom).isFile) {
                     JOptionPane.showMessageDialog(
                         this,
-                        "ROM file(s) not found:\n  $u18\n  $u19",
+                        "ROM file(s) not found:\n  $u18\n  $u19\n  $fdrom",
                         "System ROMs",
                         JOptionPane.ERROR_MESSAGE,
                     )
@@ -956,8 +972,7 @@ private class WizardDialog(
         sb.appendLine("───────────")
         sb.appendLine("U18:       ${u18Field.text.trim()}")
         sb.appendLine("U19:       ${u19Field.text.trim()}")
-        val fdromBeside = File(File(u18Field.text.trim()).parentFile ?: File("."), "fdrom.bin")
-        sb.appendLine("fdrom:     ${if (fdromBeside.isFile) fdromBeside.path else "(not beside U18 — HD INT 13h may need roms/fdrom.bin)"}")
+        sb.appendLine("fdrom:     ${fdromField.text.trim()}")
         sb.appendLine()
         sb.appendLine("MOTHERBOARD")
         sb.appendLine("───────────")
@@ -1056,6 +1071,7 @@ private class WizardDialog(
             setup = setup,
             u18RomPath = u18Field.text.trim(),
             u19RomPath = u19Field.text.trim(),
+            fdromPath = fdromField.text.trim(),
         )
         dispose()
     }

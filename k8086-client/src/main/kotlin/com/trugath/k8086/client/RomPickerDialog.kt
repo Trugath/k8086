@@ -16,8 +16,15 @@ import javax.swing.JPanel
 import javax.swing.JTextField
 import javax.swing.border.EmptyBorder
 
+/** Chosen ROM source paths from [RomPickerDialog]. */
+data class RomPickResult(
+    val u18: String,
+    val u19: String,
+    val fdrom: String,
+)
+
 /**
- * Choose U18/U19 source images for VM create or edit.
+ * Choose U18/U19/fdrom source images for VM edit.
  * Defaults are the shipped rmDOS ROMs; Browse overrides for this VM only.
  */
 class RomPickerDialog(
@@ -25,11 +32,13 @@ class RomPickerDialog(
     title: String,
     initialU18: String,
     initialU19: String,
+    initialFdrom: String,
     note: String = "These images are copied into the VM as immutable snapshots.",
 ) : JDialog(owner, title, ModalityType.APPLICATION_MODAL) {
     private val u18Field = JTextField(initialU18, 36)
     private val u19Field = JTextField(initialU19, 36)
-    private var result: Pair<String, String>? = null
+    private val fdromField = JTextField(initialFdrom, 36)
+    private var result: RomPickResult? = null
 
     init {
         defaultCloseOperation = DISPOSE_ON_CLOSE
@@ -39,21 +48,19 @@ class RomPickerDialog(
                 insets = Insets(4, 4, 4, 4)
                 anchor = GridBagConstraints.WEST
             }
-            c.gridx = 0; c.gridy = 0
-            add(JLabel("U18 ROM (32 KB):"), c)
-            c.gridx = 1; c.fill = GridBagConstraints.HORIZONTAL; c.weightx = 1.0
-            add(u18Field, c)
-            c.gridx = 2; c.fill = GridBagConstraints.NONE; c.weightx = 0.0
-            add(JButton("Browse…").also { it.addActionListener { browse(u18Field) } }, c)
+            fun row(y: Int, label: String, field: JTextField) {
+                c.gridx = 0; c.gridy = y; c.fill = GridBagConstraints.NONE; c.weightx = 0.0
+                add(JLabel(label), c)
+                c.gridx = 1; c.fill = GridBagConstraints.HORIZONTAL; c.weightx = 1.0
+                add(field, c)
+                c.gridx = 2; c.fill = GridBagConstraints.NONE; c.weightx = 0.0
+                add(JButton("Browse…").also { it.addActionListener { browse(field) } }, c)
+            }
+            row(0, "U18 ROM (32 KB):", u18Field)
+            row(1, "U19 ROM (8 KB):", u19Field)
+            row(2, "FD ROM (2 KB):", fdromField)
 
-            c.gridx = 0; c.gridy = 1; c.fill = GridBagConstraints.NONE; c.weightx = 0.0
-            add(JLabel("U19 ROM (8 KB):"), c)
-            c.gridx = 1; c.fill = GridBagConstraints.HORIZONTAL; c.weightx = 1.0
-            add(u19Field, c)
-            c.gridx = 2; c.fill = GridBagConstraints.NONE; c.weightx = 0.0
-            add(JButton("Browse…").also { it.addActionListener { browse(u19Field) } }, c)
-
-            c.gridx = 0; c.gridy = 2; c.gridwidth = 3; c.fill = GridBagConstraints.HORIZONTAL
+            c.gridx = 0; c.gridy = 3; c.gridwidth = 3; c.fill = GridBagConstraints.HORIZONTAL
             add(JLabel("<html><i>$note</i></html>"), c)
         }
         val buttons = JPanel(FlowLayout(FlowLayout.RIGHT)).apply {
@@ -63,7 +70,7 @@ class RomPickerDialog(
         contentPane.layout = BorderLayout()
         contentPane.add(form, BorderLayout.CENTER)
         contentPane.add(buttons, BorderLayout.SOUTH)
-        preferredSize = Dimension(640, 180)
+        preferredSize = Dimension(640, 220)
         pack()
         setLocationRelativeTo(owner)
     }
@@ -82,20 +89,26 @@ class RomPickerDialog(
     private fun onOk() {
         val u18 = u18Field.text.trim()
         val u19 = u19Field.text.trim()
-        if (u18.isEmpty() || u19.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Both U18 and U19 paths are required.", title, JOptionPane.WARNING_MESSAGE)
-            return
-        }
-        if (!File(u18).isFile || !File(u19).isFile) {
+        val fdrom = fdromField.text.trim()
+        if (u18.isEmpty() || u19.isEmpty() || fdrom.isEmpty()) {
             JOptionPane.showMessageDialog(
                 this,
-                "ROM file(s) not found:\n  $u18\n  $u19",
+                "U18, U19, and Fixed Disk ROM paths are required.",
+                title,
+                JOptionPane.WARNING_MESSAGE,
+            )
+            return
+        }
+        if (!File(u18).isFile || !File(u19).isFile || !File(fdrom).isFile) {
+            JOptionPane.showMessageDialog(
+                this,
+                "ROM file(s) not found:\n  $u18\n  $u19\n  $fdrom",
                 title,
                 JOptionPane.ERROR_MESSAGE,
             )
             return
         }
-        result = u18 to u19
+        result = RomPickResult(u18, u19, fdrom)
         dispose()
     }
 
@@ -105,9 +118,10 @@ class RomPickerDialog(
             title: String,
             initialU18: String,
             initialU19: String,
+            initialFdrom: String,
             note: String = "These images are copied into the VM as immutable snapshots.",
-        ): Pair<String, String>? {
-            val d = RomPickerDialog(owner, title, initialU18, initialU19, note)
+        ): RomPickResult? {
+            val d = RomPickerDialog(owner, title, initialU18, initialU19, initialFdrom, note)
             d.isVisible = true
             return d.result
         }

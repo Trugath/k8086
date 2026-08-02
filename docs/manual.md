@@ -24,7 +24,7 @@ Toolbar:
 
 | Button | Action |
 |--------|--------|
-| **New…** | Create VM wizard → name → ROM picker |
+| **New…** | Create VM wizard (includes ROMs) → name |
 | **Edit…** | Rename / replace ROM snapshots (VM must be stopped or in error) |
 | **Networks…** | Manage virtual NAT networks |
 | **Start** / **Stop** | Run or cooperatively stop the selected VM |
@@ -44,11 +44,19 @@ paths.
 ## New VM wizard
 
 Opened from **New…**. Nothing is applied until you click **Create** on Review
-(then name the VM and confirm ROMs).
+(then name the VM). System ROM paths are chosen on the **ROMs** step.
 
 ### Welcome
 
 ![Welcome](screenshots/02-wizard-welcome.png)
+
+### ROMs
+
+U18 (32 KB), U19 (8 KB), and Fixed Disk option ROM (`fdrom`, 2 KB at C800:).
+Defaults are `roms/u18.bin`, `roms/u19.bin`, and `roms/fdrom.bin`. On create,
+copies under `~/.k8086/vms/<id>/roms/` are immutable snapshots for that VM.
+
+![ROMs](screenshots/02-wizard-roms.png)
 
 ### System
 
@@ -93,15 +101,12 @@ Summary plus validation. **Create** returns the setup to the manager (CLI uses
 
 ![Review](screenshots/02-wizard-review.png)
 
-### ROM picker
+### Edit ROMs (after create)
 
-After Create, choose U18 (32 KB) and U19 (8 KB) sources. Defaults are
-`roms/u18.bin` and `roms/u19.bin`. Copies under `~/.k8086/vms/<id>/roms/` are
-immutable snapshots for that VM.
+**Edit…** on a stopped VM prompts for a new name, then the ROM picker to replace
+U18/U19/fdrom snapshot sources. Unchanged paths keep the existing snapshots.
 
-![ROM picker](screenshots/03-rom-picker.png)
-
-**Edit…** on a stopped VM reuses the same name + ROM dialogs.
+![Edit ROM picker](screenshots/03-rom-picker.png)
 
 ---
 
@@ -125,7 +130,9 @@ module map.
 ![Console](screenshots/06-console.png)
 
 Opens only when the VM is starting, running, or paused. Focus the black display
-to send keyboard scan codes to the guest.
+to send keyboard scan codes to the guest. Tab / Shift+Tab stay on the display
+(they are not used to move focus onto the toolbar). Right-click pastes clipboard
+text as guest keystrokes.
 
 | Control | Role |
 |---------|------|
@@ -178,8 +185,9 @@ See the [README](../README.md) for hard-disk CLI forms and card examples.
 
 ## Regenerating screenshots
 
-From the repo root (requires a display and an existing VM under `~/.k8086/vms`
-for console/debug shots):
+From the repo root (requires a display). If `~/.k8086/vms` is empty, the task
+creates a temporary `doc-screenshot` VM with `disks/fd.img` for console/debug
+shots:
 
 ```bash
 ./gradlew :k8086-app:docScreenshots

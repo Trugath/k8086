@@ -62,6 +62,24 @@ class LocalHostTest {
         val snapFd = File(temp, "vms/${id.value}/roms/fdrom.bin")
         assertTrue(snapFd.isFile, "fdrom.bin should be snapshotted beside U18/U19")
         assertEquals(0x55.toByte(), snapFd.readBytes()[0])
+        assertEquals(snapFd.absolutePath, host!!.getDefinition(id)!!.hardDisk.fixedDiskRomPath)
+    }
+
+    @Test
+    fun materializeUsesExplicitFdromPath() {
+        val store = VmStore(temp)
+        host = LocalHost(store)
+        val id = VmId(UUID.randomUUID().toString())
+        val (u18Src, u19Src) = writeDummyRoms(temp)
+        val fdrom = File(temp, "custom-fdrom.bin").also { it.writeBytes(ByteArray(64) { 0xAA.toByte() }) }
+        val def = sampleDef(id, "fdrom-explicit", u18Src.absolutePath, u19Src.absolutePath).let {
+            it.copy(hardDisk = it.hardDisk.copy(fixedDiskRomPath = fdrom.absolutePath))
+        }
+        host!!.createVm(def)
+        val snapFd = File(temp, "vms/${id.value}/roms/fdrom.bin")
+        assertTrue(snapFd.isFile)
+        assertEquals(0xAA.toByte(), snapFd.readBytes()[0])
+        assertEquals(snapFd.absolutePath, host!!.getDefinition(id)!!.hardDisk.fixedDiskRomPath)
     }
 
     @Test

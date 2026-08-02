@@ -250,10 +250,18 @@ class ManagerFrame(
             "Edit system ROMs",
             def.u18RomPath,
             def.u19RomPath,
+            def.hardDisk.fixedDiskRomPath ?: SystemRomDefaults.resolveFdrom(),
             note = "Browse to replace ROM snapshots (only while the VM is shut down). Unchanged paths keep the existing snapshots.",
         ) ?: return
         try {
-            host.updateVm(def.copy(name = name, u18RomPath = roms.first, u19RomPath = roms.second))
+            host.updateVm(
+                def.copy(
+                    name = name,
+                    u18RomPath = roms.u18,
+                    u19RomPath = roms.u19,
+                    hardDisk = def.hardDisk.copy(fixedDiskRomPath = roms.fdrom),
+                ),
+            )
             refreshList(preserveSelection = true)
         } catch (ex: Exception) {
             JOptionPane.showMessageDialog(this, ex.message, "Edit VM", JOptionPane.ERROR_MESSAGE)

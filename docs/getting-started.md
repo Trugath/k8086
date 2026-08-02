@@ -36,19 +36,19 @@ VM definitions live under `~/.k8086/vms/`.
 ## Create a VM
 
 1. Click **New…**
-2. Walk the wizard (Welcome → System → Adapters → Drives → Network → Expansion → Review).
-   Defaults boot rmDOS from `disks/fd.img` with CGA, COM1, and a floppy controller.
-3. On Review, click **Create**.
+2. Walk the wizard (Welcome → **ROMs** → System → Adapters → Drives → Network →
+   Expansion → Review). Defaults use shipped rmDOS U18/U19 + `fdrom.bin`, boot from
+   `disks/fd.img`, and enable CGA, COM1, and a floppy controller.
+3. On Review, click **Create**, then enter a VM name when prompted.
+
+ROM images are copied into the VM as immutable snapshots under
+`~/.k8086/vms/<id>/roms/`.
 
 ![New VM wizard — Welcome](screenshots/02-wizard-welcome.png)
 
+![System ROMs step](screenshots/02-wizard-roms.png)
+
 ![Review and Create](screenshots/02-wizard-review.png)
-
-4. Enter a VM name when prompted.
-5. Confirm system ROMs (defaults are the shipped rmDOS U18/U19). Images are copied
-   into the VM as immutable snapshots.
-
-![System ROM picker](screenshots/03-rom-picker.png)
 
 ## Start and open the console
 
@@ -58,20 +58,21 @@ VM definitions live under `~/.k8086/vms/`.
 You should see rmDOS POST, then a prompt similar to:
 
 ```text
-rmDOS 0.7
-A:>
+rmDOS 0.8
+A:\>
 ```
 
 ![Console after boot](screenshots/06-console.png)
 
-Type guest commands with the console focused. Use **Ctrl+Alt+Del** on the toolbar
-for a warm boot (CAD), and **Change A:** to insert or eject a floppy image while
-running.
+Type guest commands with the console focused (Tab stays on the display, not the
+toolbar). Use **Ctrl+Alt+Del** on the toolbar for a warm boot (CAD), and
+**Change A:** to insert or eject a floppy image while running. Right-click the
+display to paste clipboard text.
 
 ## Stop
 
 Back in the manager, click **Stop**. Use **Edit…** only while the VM is stopped
-(rename or replace ROM snapshots).
+(rename and/or replace ROM snapshots).
 
 ## Next steps
 

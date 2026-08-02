@@ -7,7 +7,11 @@ import com.trugath.k8086.client.VmConsoleWindow
 import com.trugath.k8086.client.VmDebugWindow
 import com.trugath.k8086.client.defaultRomPaths
 import com.trugath.k8086.client.romsExist
+import com.trugath.k8086.config.FloppyControllerConfig
+import com.trugath.k8086.config.MachineSetup
 import com.trugath.k8086.host.LocalHost
+import com.trugath.k8086.host.SetupMapper
+import com.trugath.k8086.protocol.SystemRomDefaults
 import com.trugath.k8086.protocol.VmId
 import com.trugath.k8086.protocol.VmState
 import com.trugath.k8086.ui.StartWizard
@@ -49,6 +53,15 @@ fun main(args: Array<String>) {
 
     println("Capturing screenshots → ${outDir.path}")
 
+    if (host.listVms().isEmpty()) {
+        println("  no VMs under ~/.k8086/vms — creating temporary 'doc-screenshot' VM")
+        val setup = MachineSetup(
+            floppy = FloppyControllerConfig(enabled = true, driveImages = listOf("disks/fd.img")),
+        )
+        val def = SetupMapper.fromMachineSetup(setup, "doc-screenshot", u18, u19)
+        host.createVm(def)
+    }
+
     val manager = edt {
         ManagerFrame(host, u18, u19).also {
             it.defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
@@ -67,13 +80,15 @@ fun main(args: Array<String>) {
         true
     }
 
+    // Edit… still uses RomPickerDialog (create flow picks ROMs in the wizard).
     val romPicker = edt {
         RomPickerDialog(
             manager,
-            "System ROMs",
+            "Edit system ROMs",
             u18,
             u19,
-            note = "Defaults are rmDOS U18/U19. Browse to override. Images are copied into the VM as immutable snapshots.",
+            SystemRomDefaults.resolveFdrom(),
+            note = "Browse to replace ROM snapshots (only while the VM is shut down). Unchanged paths keep the existing snapshots.",
         ).also {
             it.isModal = false
             it.isVisible = true
@@ -101,14 +116,7 @@ fun main(args: Array<String>) {
     println("  05-network-edit.png")
     edt { networkEdit.dispose() }
 
-    val vm = host.listVms().firstOrNull()
-        ?: run {
-            System.err.println("No VMs defined under ~/.k8086/vms — skipping console/debug shots.")
-            edt { manager.dispose() }
-            host.close()
-            println("Done (partial).")
-            exitProcess(0)
-        }
+    val vm = host.listVms().first()
 
     // Ensure a stopped VM before starting for a clean boot screenshot.
     if (vm.state == VmState.Running || vm.state == VmState.Starting || vm.state == VmState.Paused) {

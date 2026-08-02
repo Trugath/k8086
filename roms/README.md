@@ -25,20 +25,22 @@ rebuild from rmDOS (`make bios` / `make install-roms`) and copy here.
 ```bash
 export K8086_U18_ROM=/path/to/u18.bin
 export K8086_U19_ROM=/path/to/u19.bin
+export K8086_FDROM=/path/to/fdrom.bin
 ./gradlew :k8086-emulator:run --args='disks/fd.img'
 ```
 
 **Workstation (multi-VM):**
 
-- **New…** — the create wizard includes a **ROMs** step (defaults `roms/u18.bin` /
-  `roms/u19.bin`). Browse to override for that VM; images are snapshotted under
-  `vms/<id>/roms/` (including `fdrom.bin` when present beside U18).
+- **New…** — the create wizard includes a **ROMs** step for U18, U19, and the
+  Fixed Disk option ROM (defaults `roms/u18.bin` / `roms/u19.bin` /
+  `roms/fdrom.bin`). Browse to override; images are snapshotted under
+  `vms/<id>/roms/`.
 - **Edit…** — available when the VM is **stopped**. Change the name and/or pick
-  new U18/U19 images; the host re-copies them into the VM’s ROM snapshots.
+  new U18/U19/fdrom images; the host re-copies them into the VM’s ROM snapshots.
 
-Per-VM snapshots live under `~/.k8086/vms/<id>/roms/{u18,u19}.bin` and are stored
-as absolute paths in `vm.properties`. Those files are treated as immutable for the
-life of that definition until you Edit and replace them.
+Per-VM snapshots live under `~/.k8086/vms/<id>/roms/{u18,u19,fdrom}.bin` and are
+stored as absolute paths in `vm.properties`. Those files are treated as immutable
+for the life of that definition until you Edit and replace them.
 
 See also [docs/architecture.md](../docs/architecture.md) for how
 `Machine` / `loadSystemRoms` maps the chips.

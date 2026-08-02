@@ -9,8 +9,7 @@ import java.io.File
  *
  * Create/edit supply *source* paths; the host copies them into the VM directory and
  * persists those absolute snapshot paths in `vm.properties`. [FDROM_NAME] is copied
- * from beside the source U18 (or [SystemRomDefaults.FDROM_RELATIVE]) when present so
- * guest Fixed Disk INT 13h works with HD-enabled VMs.
+ * from an explicit source, beside the source U18, or [SystemRomDefaults.FDROM_RELATIVE].
  */
 object VmRomSnapshots {
     const val U18_NAME = "u18.bin"
@@ -28,12 +27,16 @@ object VmRomSnapshots {
     fun fdromFile(store: VmStore, id: VmId): File =
         File(romDir(store, id), FDROM_NAME)
 
-    /** Copy [sourceU18]/[sourceU19] into the VM ROM directory; return absolute snapshot paths. */
+    /**
+     * Copy [sourceU18]/[sourceU19] (and optional [sourceFdrom]) into the VM ROM
+     * directory; return absolute snapshot paths for U18/U19.
+     */
     fun materialize(
         store: VmStore,
         id: VmId,
         sourceU18: File,
         sourceU19: File,
+        sourceFdrom: File? = null,
     ): Pair<String, String> {
         require(sourceU18.isFile) { "U18 ROM not found: ${sourceU18.path}" }
         require(sourceU19.isFile) { "U19 ROM not found: ${sourceU19.path}" }
@@ -41,21 +44,30 @@ object VmRomSnapshots {
         dst18.parentFile.mkdirs()
         copyImmutable(sourceU18, dst18)
         copyImmutable(sourceU19, dst19)
-        ensureFdrom(store, id, hintBeside = sourceU18)
+        ensureFdrom(store, id, hintBeside = sourceU18, explicitSource = sourceFdrom, force = true)
         return dst18.absolutePath to dst19.absolutePath
     }
 
     /**
-     * Ensure [FDROM_NAME] exists in the VM ROM dir when a Fixed Disk option ROM is
-     * available beside [hintBeside] or at the shipped default path.
+     * Ensure [FDROM_NAME] exists in the VM ROM dir from [explicitSource], beside
+     * [hintBeside], the shipped default, or `K8086_FDROM`.
+     *
+     * @param force replace an existing snapshot when a source is available
      */
-    fun ensureFdrom(store: VmStore, id: VmId, hintBeside: File? = null) {
+    fun ensureFdrom(
+        store: VmStore,
+        id: VmId,
+        hintBeside: File? = null,
+        explicitSource: File? = null,
+        force: Boolean = false,
+    ) {
         val dst = fdromFile(store, id)
-        if (dst.isFile) return
+        if (dst.isFile && !force) return
         val candidates = buildList {
+            explicitSource?.let { add(it) }
             hintBeside?.parentFile?.let { add(File(it, FDROM_NAME)) }
+            add(File(SystemRomDefaults.resolveFdrom()))
             add(File(SystemRomDefaults.FDROM_RELATIVE))
-            System.getenv("K8086_FDROM")?.takeIf { it.isNotBlank() }?.let { add(File(it)) }
         }
         val src = candidates.firstOrNull { it.isFile } ?: return
         dst.parentFile.mkdirs()
