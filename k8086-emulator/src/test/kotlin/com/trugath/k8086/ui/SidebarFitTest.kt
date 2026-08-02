@@ -33,9 +33,17 @@ class SidebarFitTest {
             val netApi = Class.forName("com.trugath.k8086.protocol.NetworkApi")
             val modeCls = Class.forName("com.trugath.k8086.ui.WizardMode")
             val createMode = modeCls.enumConstants.first { it.toString() == "CREATE" }
-            val ctor = cls.declaredConstructors.first {
-                it.parameterCount >= 6 && it.parameterTypes[1] == modeCls
-            }.also { it.isAccessible = true }
+            val ctor = cls.declaredConstructors
+                .filter { ctor ->
+                    ctor.parameterTypes.getOrNull(1) == modeCls &&
+                        ctor.parameterTypes.none { it.name.endsWith("DefaultConstructorMarker") }
+                }
+                .maxByOrNull { it.parameterCount }
+                ?: error("WizardDialog constructor with WizardMode not found")
+            ctor.isAccessible = true
+            require(ctor.parameterCount == 7) {
+                "expected 7-arg WizardDialog ctor, got ${ctor.parameterCount}: ${ctor.parameterTypes.toList()}"
+            }
             val dialog = ctor.newInstance(
                 null, // networks
                 createMode,
