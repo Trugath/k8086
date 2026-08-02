@@ -31,8 +31,20 @@ class SidebarFitTest {
         SwingUtilities.invokeAndWait {
             val cls = Class.forName("com.trugath.k8086.ui.WizardDialog")
             val netApi = Class.forName("com.trugath.k8086.protocol.NetworkApi")
-            val dialog = cls.getDeclaredConstructor(netApi, String::class.java).also { it.isAccessible = true }
-                .newInstance(null, "Create")
+            val modeCls = Class.forName("com.trugath.k8086.ui.WizardMode")
+            val createMode = modeCls.enumConstants.first { it.toString() == "CREATE" }
+            val ctor = cls.declaredConstructors.first {
+                it.parameterCount >= 6 && it.parameterTypes[1] == modeCls
+            }.also { it.isAccessible = true }
+            val dialog = ctor.newInstance(
+                null, // networks
+                createMode,
+                "Create",
+                "roms/u18.bin",
+                "roms/u19.bin",
+                "roms/fdrom.bin",
+                null, // initial
+            )
 
             @Suppress("UNCHECKED_CAST")
             val labels = cls.getDeclaredField("stepLabels")

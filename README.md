@@ -49,7 +49,8 @@ run the CPU conformance gates (see [Tests](#tests)).
 
 Opens the manager: New → wizard (ROMs + hardware) → Start → Console.
 VM definitions persist under `~/.k8086/vms/` (immutable ROM snapshots under
-`vms/<id>/roms/`). Use **Edit…** while a VM is stopped to rename it or replace ROMs.
+`vms/<id>/roms/`). Use **Edit…** while a VM is stopped for the full settings
+dialog (name, ROMs, adapters, drives, cards).
 
 Step-by-step with screenshots: [Getting started](docs/getting-started.md).
 

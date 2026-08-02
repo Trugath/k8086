@@ -2,7 +2,6 @@ package com.trugath.k8086.app
 
 import com.trugath.k8086.client.ManagerFrame
 import com.trugath.k8086.client.NetworksDialog
-import com.trugath.k8086.client.RomPickerDialog
 import com.trugath.k8086.client.VmConsoleWindow
 import com.trugath.k8086.client.VmDebugWindow
 import com.trugath.k8086.client.defaultRomPaths
@@ -11,7 +10,6 @@ import com.trugath.k8086.config.FloppyControllerConfig
 import com.trugath.k8086.config.MachineSetup
 import com.trugath.k8086.host.LocalHost
 import com.trugath.k8086.host.SetupMapper
-import com.trugath.k8086.protocol.SystemRomDefaults
 import com.trugath.k8086.protocol.VmId
 import com.trugath.k8086.protocol.VmState
 import com.trugath.k8086.ui.StartWizard
@@ -80,24 +78,12 @@ fun main(args: Array<String>) {
         true
     }
 
-    // Edit… still uses RomPickerDialog (create flow picks ROMs in the wizard).
-    val romPicker = edt {
-        RomPickerDialog(
-            manager,
-            "Edit system ROMs",
-            u18,
-            u19,
-            SystemRomDefaults.resolveFdrom(),
-            note = "Browse to replace ROM snapshots (only while the VM is shut down). Unchanged paths keep the existing snapshots.",
-        ).also {
-            it.isModal = false
-            it.isVisible = true
-        }
+    val settingsDef = host.getDefinition(host.listVms().first().id)!!
+    StartWizard.captureSettings(settingsDef, host.network()) { dialog ->
+        settle(300)
+        captureWindow(dialog, File(outDir, "03-vm-settings.png"))
+        println("  03-vm-settings.png")
     }
-    settle(300)
-    captureWindow(romPicker, File(outDir, "03-rom-picker.png"))
-    println("  03-rom-picker.png")
-    edt { romPicker.dispose() }
 
     val networks = edt {
         NetworksDialog(manager, host.network()).also {

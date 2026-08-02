@@ -35,8 +35,9 @@ export K8086_FDROM=/path/to/fdrom.bin
   Fixed Disk option ROM (defaults `roms/u18.bin` / `roms/u19.bin` /
   `roms/fdrom.bin`). Browse to override; images are snapshotted under
   `vms/<id>/roms/`.
-- **Edit…** — available when the VM is **stopped**. Change the name and/or pick
-  new U18/U19/fdrom images; the host re-copies them into the VM’s ROM snapshots.
+- **Edit…** — available when the VM is **stopped**. Opens the full settings
+  dialog (name, U18/U19/fdrom, motherboard, adapters, drives, networks, cards);
+  the host re-copies ROM images into the VM’s snapshots when paths change.
 
 Per-VM snapshots live under `~/.k8086/vms/<id>/roms/{u18,u19,fdrom}.bin` and are
 stored as absolute paths in `vm.properties`. Those files are treated as immutable

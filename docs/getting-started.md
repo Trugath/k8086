@@ -72,7 +72,7 @@ display to paste clipboard text.
 ## Stop
 
 Back in the manager, click **Stop**. Use **Edit…** only while the VM is stopped
-(rename and/or replace ROM snapshots).
+to open the full settings dialog (name, ROMs, hardware, cards).
 
 ## Next steps
 

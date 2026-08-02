@@ -14,13 +14,17 @@ import com.trugath.k8086.config.MachineSetup
 import com.trugath.k8086.config.MotherboardConfig
 import com.trugath.k8086.config.ValidationSeverity
 import com.trugath.k8086.cpu.XT_HARD_DISK_BYTES
+import com.trugath.k8086.protocol.GraphicsKind
+import com.trugath.k8086.protocol.InitialVideoKind
 import com.trugath.k8086.protocol.NetworkApi
 import com.trugath.k8086.protocol.NetworkDefinition
 import com.trugath.k8086.protocol.SystemRomDefaults
+import com.trugath.k8086.protocol.VmDefinition
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Color
 import java.awt.Component
+import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
@@ -28,6 +32,8 @@ import java.awt.GraphicsEnvironment
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import java.io.File
 import javax.swing.BorderFactory
 import javax.swing.Box
@@ -59,7 +65,8 @@ import javax.swing.border.EmptyBorder
 import javax.swing.filechooser.FileNameExtensionFilter
 
 /**
- * Result of [StartWizard.show]: machine setup plus chosen system ROM sources.
+ * Result of [StartWizard.show] / [StartWizard.showSettings]: machine setup plus
+ * chosen system ROM sources (and VM name for settings / optional create).
  * Workstation snapshots copy U18/U19/fdrom into the VM directory.
  */
 data class WizardResult(
@@ -67,11 +74,19 @@ data class WizardResult(
     val u18RomPath: String,
     val u19RomPath: String,
     val fdromPath: String,
+    val name: String = "",
 )
+
+private enum class WizardMode {
+    CREATE,
+    SETTINGS,
+}
 
 /**
  * VM-style setup wizard: system ROMs, adapters (graphics / FDC / HD controller / COM1),
  * virtual networks, drive media, ISA expansion cards, then Review → finish.
+ *
+ * [showSettings] opens the same panels as a settings dialog (category sidebar, Save).
  *
  * @param finishButtonLabel label on the Review step (CLI uses "Start"; the
  *   workstation New-VM flow uses "Create").
@@ -81,7 +96,7 @@ data class WizardResult(
  */
 object StartWizard {
     fun show(
-        networks: com.trugath.k8086.protocol.NetworkApi? = null,
+        networks: NetworkApi? = null,
         finishButtonLabel: String = "Start",
         defaultU18: String = SystemRomDefaults.resolve().first,
         defaultU19: String = SystemRomDefaults.resolve().second,
@@ -93,7 +108,14 @@ object StartWizard {
         }
         var result: WizardResult? = null
         val showDialog = Runnable {
-            val dialog = WizardDialog(networks, finishButtonLabel, defaultU18, defaultU19, defaultFdrom)
+            val dialog = WizardDialog(
+                networks = networks,
+                mode = WizardMode.CREATE,
+                finishButtonLabel = finishButtonLabel,
+                defaultU18 = defaultU18,
+                defaultU19 = defaultU19,
+                defaultFdrom = defaultFdrom,
+            )
             dialog.isVisible = true
             result = dialog.result
             dialog.catalog.close()
@@ -108,12 +130,48 @@ object StartWizard {
     }
 
     /**
+     * Full VM settings dialog (Edit…): same panels as create, with a clickable
+     * category sidebar and Save/Cancel. Prefills from [definition].
+     */
+    fun showSettings(
+        definition: VmDefinition,
+        networks: NetworkApi? = null,
+    ): WizardResult? {
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
+        } catch (_: Exception) {
+        }
+        var result: WizardResult? = null
+        val showDialog = Runnable {
+            val dialog = WizardDialog(
+                networks = networks,
+                mode = WizardMode.SETTINGS,
+                finishButtonLabel = "Save",
+                defaultU18 = definition.u18RomPath,
+                defaultU19 = definition.u19RomPath,
+                defaultFdrom = definition.hardDisk.fixedDiskRomPath
+                    ?: SystemRomDefaults.resolveFdrom(),
+                initial = definition,
+            )
+            dialog.isVisible = true
+            result = dialog.result
+            dialog.catalog.close()
+        }
+        if (SwingUtilities.isEventDispatchThread()) {
+            showDialog.run()
+        } else {
+            SwingUtilities.invokeAndWait(showDialog)
+        }
+        return result
+    }
+
+    /**
      * Non-modal walk of every wizard page for documentation screenshots.
      * Creates the dialog on the EDT; [onStep] runs on the calling thread after each page.
      * Return false from [onStep] to stop early.
      */
     fun captureSteps(
-        networks: com.trugath.k8086.protocol.NetworkApi? = null,
+        networks: NetworkApi? = null,
         finishButtonLabel: String = "Create",
         defaultU18: String = SystemRomDefaults.resolve().first,
         defaultU19: String = SystemRomDefaults.resolve().second,
@@ -126,20 +184,65 @@ object StartWizard {
         }
         lateinit var dialog: WizardDialog
         SwingUtilities.invokeAndWait {
-            dialog = WizardDialog(networks, finishButtonLabel, defaultU18, defaultU19, defaultFdrom)
+            dialog = WizardDialog(
+                networks = networks,
+                mode = WizardMode.CREATE,
+                finishButtonLabel = finishButtonLabel,
+                defaultU18 = defaultU18,
+                defaultU19 = defaultU19,
+                defaultFdrom = defaultFdrom,
+            )
             dialog.isModal = false
             dialog.defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
             dialog.isVisible = true
         }
         try {
-            for (step in WizardStep.entries) {
+            for (step in dialog.steps) {
                 SwingUtilities.invokeAndWait {
-                    dialog.showStepForCapture(step.ordinal)
+                    dialog.showStepForCapture(dialog.steps.indexOf(step))
                     dialog.toFront()
                     dialog.repaint()
                 }
                 if (!onStep(step.name.lowercase(), dialog)) break
             }
+        } finally {
+            SwingUtilities.invokeAndWait {
+                dialog.dispose()
+                dialog.catalog.close()
+            }
+        }
+    }
+
+    /**
+     * Open settings non-modally and invoke [onReady] once visible (for screenshots).
+     */
+    fun captureSettings(
+        definition: VmDefinition,
+        networks: NetworkApi? = null,
+        onReady: (dialog: JDialog) -> Unit,
+    ) {
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
+        } catch (_: Exception) {
+        }
+        lateinit var dialog: WizardDialog
+        SwingUtilities.invokeAndWait {
+            dialog = WizardDialog(
+                networks = networks,
+                mode = WizardMode.SETTINGS,
+                finishButtonLabel = "Save",
+                defaultU18 = definition.u18RomPath,
+                defaultU19 = definition.u19RomPath,
+                defaultFdrom = definition.hardDisk.fixedDiskRomPath
+                    ?: SystemRomDefaults.resolveFdrom(),
+                initial = definition,
+            )
+            dialog.isModal = false
+            dialog.defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
+            dialog.isVisible = true
+        }
+        try {
+            onReady(dialog)
         } finally {
             SwingUtilities.invokeAndWait {
                 dialog.dispose()
@@ -155,6 +258,7 @@ private const val STEP_MARKER_PENDING = " "
 private const val SIDEBAR_TEXT_SLACK = 16
 
 private enum class WizardStep(val title: String, val subtitle: String) {
+    GENERAL("General", "VM name"),
     WELCOME("Welcome", "Create an IBM 5155 / XT virtual machine"),
     ROMS("ROMs", "U18 / U19 system BIOS and Fixed Disk option ROM"),
     SYSTEM("System", "Memory, 8087, and motherboard switches"),
@@ -166,17 +270,51 @@ private enum class WizardStep(val title: String, val subtitle: String) {
 }
 
 private class WizardDialog(
-    private val networks: com.trugath.k8086.protocol.NetworkApi?,
+    private val networks: NetworkApi?,
+    private val mode: WizardMode,
     private val finishButtonLabel: String = "Start",
     defaultU18: String,
     defaultU19: String,
     defaultFdrom: String,
-) : JDialog(null as JFrame?, "k8086 — Create Virtual Machine", true) {
-    val catalog = CardCatalog().also { it.refresh() }
+    private val initial: VmDefinition? = null,
+) : JDialog(
+    null as JFrame?,
+    if (mode == WizardMode.SETTINGS) {
+        "k8086 — VM settings — ${initial?.name ?: "VM"}"
+    } else {
+        "k8086 — Create Virtual Machine"
+    },
+    true,
+) {
+    val catalog = CardCatalog()
     var result: WizardResult? = null
 
     private var stepIndex = 0
-    private val steps = WizardStep.entries
+    val steps: List<WizardStep> = when (mode) {
+        WizardMode.CREATE -> listOf(
+            WizardStep.WELCOME,
+            WizardStep.ROMS,
+            WizardStep.SYSTEM,
+            WizardStep.ADAPTERS,
+            WizardStep.DRIVES,
+            WizardStep.NETWORK,
+            WizardStep.CARDS,
+            WizardStep.REVIEW,
+        )
+        WizardMode.SETTINGS -> listOf(
+            WizardStep.GENERAL,
+            WizardStep.ROMS,
+            WizardStep.SYSTEM,
+            WizardStep.ADAPTERS,
+            WizardStep.DRIVES,
+            WizardStep.NETWORK,
+            WizardStep.CARDS,
+            WizardStep.REVIEW,
+        )
+    }
+
+    // --- General (settings) ---
+    private val nameField = JTextField(initial?.name ?: "", 28)
 
     // --- System ROMs ---
     private val u18Field = JTextField(defaultU18, 28)
@@ -229,6 +367,8 @@ private class WizardDialog(
     // --- Expansion ---
     private val cardRows = mutableListOf<CardRow>()
     private val cardsPanel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
+    /** Seed for [rebuildCardRows] before any live rows exist (settings prefill). */
+    private var cardSeed: Map<String, Pair<Boolean, Map<String, String>>> = emptyMap()
 
     private val summaryArea = JTextArea().apply {
         isEditable = false
@@ -249,6 +389,9 @@ private class WizardDialog(
     init {
         defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
 
+        val extraJars = initial?.cards?.map { File(it.jarPath) }.orEmpty()
+        catalog.refresh(extraJars)
+
         ButtonGroup().also { it.add(graphicsCga); it.add(graphicsNone) }
         ButtonGroup().also { it.add(size10); it.add(size20); it.add(size40); it.add(sizeCustom) }
         customMb.isEnabled = false
@@ -268,19 +411,26 @@ private class WizardDialog(
         fdcCheck.addActionListener { updateDriveSections() }
         hdCheck.addActionListener { updateDriveSections() }
 
-        preferredFloppy()?.let { addFloppyRow(it) }
+        if (mode == WizardMode.CREATE) {
+            preferredFloppy()?.let { addFloppyRow(it) }
+        }
         buildHdConfigPanel()
         updateDriveSections()
         refreshNetworkList()
 
-        addPage(WizardStep.WELCOME, buildWelcomePage())
-        addPage(WizardStep.ROMS, buildRomsPage())
-        addPage(WizardStep.SYSTEM, buildSystemPage())
-        addPage(WizardStep.ADAPTERS, buildAdaptersPage())
-        addPage(WizardStep.DRIVES, buildDrivesPage())
-        addPage(WizardStep.NETWORK, buildNetworkPage())
-        addPage(WizardStep.CARDS, buildCardsPage())
-        addPage(WizardStep.REVIEW, buildReviewPage())
+        for (step in steps) {
+            when (step) {
+                WizardStep.GENERAL -> addPage(step, buildGeneralPage())
+                WizardStep.WELCOME -> addPage(step, buildWelcomePage())
+                WizardStep.ROMS -> addPage(step, buildRomsPage())
+                WizardStep.SYSTEM -> addPage(step, buildSystemPage())
+                WizardStep.ADAPTERS -> addPage(step, buildAdaptersPage())
+                WizardStep.DRIVES -> addPage(step, buildDrivesPage())
+                WizardStep.NETWORK -> addPage(step, buildNetworkPage())
+                WizardStep.CARDS -> addPage(step, buildCardsPage())
+                WizardStep.REVIEW -> addPage(step, buildReviewPage())
+            }
+        }
 
         val sidebar = buildSidebar()
         val header = JPanel(BorderLayout()).apply {
@@ -298,7 +448,7 @@ private class WizardDialog(
             border = EmptyBorder(8, 12, 10, 12)
             add(cancelButton, BorderLayout.WEST)
             add(JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0)).apply {
-                add(backButton)
+                if (mode == WizardMode.CREATE) add(backButton)
                 add(nextButton)
             }, BorderLayout.EAST)
         }
@@ -312,10 +462,78 @@ private class WizardDialog(
         nextButton.addActionListener { onNextOrStart() }
         cancelButton.addActionListener { onCancel() }
 
+        if (mode == WizardMode.SETTINGS) {
+            nextButton.text = "Save"
+            initial?.let { applyDefinition(it) }
+        }
+
         rebuildCardRows()
         showStep(0)
         pack()
         fitToUsableScreen()
+    }
+
+    private fun applyDefinition(def: VmDefinition) {
+        nameField.text = def.name
+        u18Field.text = def.u18RomPath
+        u19Field.text = def.u19RomPath
+        fdromField.text = def.hardDisk.fixedDiskRomPath ?: SystemRomDefaults.resolveFdrom()
+
+        val cpu = CpuModel.fromWire(def.motherboard.cpu)
+        cpuCombo.selectedIndex = cpu.ordinal
+        val memIdx = MotherboardConfig.MEMORY_PRESETS_KB.indexOf(def.motherboard.baseMemoryKb)
+        memoryCombo.selectedIndex = if (memIdx >= 0) memIdx else MotherboardConfig.MEMORY_PRESETS_KB.indexOf(640).coerceAtLeast(0)
+        coprocessorCheck.isSelected = def.motherboard.mathCoprocessor
+        videoModeCombo.selectedIndex = when (def.motherboard.initialVideo) {
+            InitialVideoKind.SPECIAL_OR_NONE -> InitialVideoMode.SPECIAL_OR_NONE.ordinal
+            InitialVideoKind.CGA_40x25 -> InitialVideoMode.CGA_40x25.ordinal
+            InitialVideoKind.CGA_80x25 -> InitialVideoMode.CGA_80x25.ordinal
+            InitialVideoKind.MDA_80x25 -> InitialVideoMode.MDA_80x25.ordinal
+        }
+        postLoopCheck.isSelected = def.motherboard.postLoop
+
+        when (def.graphics) {
+            GraphicsKind.CGA -> {
+                graphicsCga.isSelected = true
+                showVideoCheck.isEnabled = true
+                showVideoCheck.isSelected = true
+            }
+            GraphicsKind.NONE -> {
+                graphicsNone.isSelected = true
+                showVideoCheck.isEnabled = false
+                showVideoCheck.isSelected = false
+            }
+        }
+        com1Check.isSelected = def.enableCom1
+        fdcCheck.isSelected = def.floppy.enabled
+        hdCheck.isSelected = def.hardDisk.enabled
+
+        hdIoField.text = "0x${def.hardDisk.ioBase.toString(16)}"
+        hdIrqSpinner.value = def.hardDisk.irq
+        hdDmaSpinner.value = def.hardDisk.dmaChannel
+        hdImageField.text = def.hardDisk.imagePath ?: "disks/hd.img"
+        bootHdCheck.isSelected = def.hardDisk.bootFromDisk
+        val mb = def.hardDisk.provisionBytes / (1024L * 1024L)
+        when (mb) {
+            10L -> size10.isSelected = true
+            20L -> size20.isSelected = true
+            40L -> size40.isSelected = true
+            else -> {
+                sizeCustom.isSelected = true
+                customMb.value = mb.toInt().coerceIn(1, 2048)
+            }
+        }
+
+        floppyFields.clear()
+        if (def.floppy.enabled) {
+            for (path in def.floppy.driveImages) addFloppyRow(path)
+        }
+        rebuildFloppyList()
+        updateDriveSections()
+
+        cardSeed = def.cards.associate { card ->
+            File(card.jarPath).absolutePath to (card.enabled to card.config)
+        }
     }
 
     private fun addPage(step: WizardStep, component: Component) {
@@ -453,18 +671,21 @@ private class WizardDialog(
             background = UIManager.getColor("Panel.background")?.darker() ?: Color(245, 245, 245)
             isOpaque = true
         }
-        panel.add(JLabel("Steps").also {
+        panel.add(JLabel(if (mode == WizardMode.SETTINGS) "Settings" else "Steps").also {
             it.font = it.font.deriveFont(Font.BOLD)
             it.border = EmptyBorder(0, 4, 10, 0)
         })
-        steps.forEachIndexed { i, step ->
+        steps.forEachIndexed { i, _ ->
             val label = JLabel(stepLabelText(i, STEP_MARKER_PENDING)).apply {
                 border = EmptyBorder(6, 4, 6, 4)
                 alignmentX = LEFT_ALIGNMENT
-                cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
-                addMouseListener(object : java.awt.event.MouseAdapter() {
-                    override fun mouseClicked(e: java.awt.event.MouseEvent?) {
-                        if (i <= stepIndex) goTo(i)
+                cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+                addMouseListener(object : MouseAdapter() {
+                    override fun mouseClicked(e: MouseEvent?) {
+                        when (mode) {
+                            WizardMode.SETTINGS -> goTo(i)
+                            WizardMode.CREATE -> if (i <= stepIndex) goTo(i)
+                        }
                     }
                 })
             }
@@ -498,6 +719,22 @@ private class WizardDialog(
 
     private fun stepLabelText(index: Int, marker: String): String =
         "$marker  ${index + 1}.  ${steps[index].title}"
+
+    private fun buildGeneralPage(): JPanel = paddedColumn().also { p ->
+        p.add(sectionTitle("Virtual machine"))
+        p.add(JLabel("<html><body style='width:480px'>" +
+            "Name appears in the manager list. Hardware and ROM changes apply on <b>Save</b> " +
+            "(the VM must be stopped)." +
+            "</body></html>").also { it.alignmentX = LEFT_ALIGNMENT })
+        p.add(Box.createVerticalStrut(12))
+        p.add(JPanel(BorderLayout(6, 0)).also {
+            it.alignmentX = LEFT_ALIGNMENT
+            it.add(JLabel("Name:"), BorderLayout.WEST)
+            it.add(nameField, BorderLayout.CENTER)
+            it.maximumSize = Dimension(Int.MAX_VALUE, it.preferredSize.height)
+        })
+        p.add(Box.createVerticalGlue())
+    }
 
     private fun buildWelcomePage(): JPanel = paddedColumn().also { p ->
         p.add(JLabel("<html><body style='width:460px'>" +
@@ -645,14 +882,19 @@ private class WizardDialog(
         outer.add(JLabel("Optional ISA expansion cards (JAR plugins)."), BorderLayout.NORTH)
         outer.add(JScrollPane(cardsPanel), BorderLayout.CENTER)
         outer.add(JPanel(FlowLayout(FlowLayout.LEFT)).also {
-            it.add(JButton("Refresh").also { b -> b.addActionListener { catalog.refresh(); rebuildCardRows() } })
+            it.add(JButton("Refresh").also { b ->
+                b.addActionListener {
+                    catalog.refresh(cardExtraJars())
+                    rebuildCardRows()
+                }
+            })
             it.add(JButton("Add JAR…").also { b ->
                 b.addActionListener {
                     val chooser = JFileChooser(File("cards")).apply {
                         fileFilter = FileNameExtensionFilter("ISA card JAR", "jar")
                     }
                     if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-                        catalog.refresh(listOf(chooser.selectedFile))
+                        catalog.refresh(cardExtraJars() + chooser.selectedFile)
                         rebuildCardRows()
                     }
                 }
@@ -790,8 +1032,18 @@ private class WizardDialog(
         it.border = EmptyBorder(2, 20, 8, 0)
     }
 
+    private fun cardExtraJars(): List<File> =
+        initial?.cards?.map { File(it.jarPath) }.orEmpty() +
+            cardRows.map { File(it.entry.jarPath) }
+
     private fun rebuildCardRows() {
-        val previous = cardRows.associate { it.entry.jarPath to (it.enabled.isSelected to it.configValues()) }
+        val previous = if (cardRows.isNotEmpty()) {
+            cardRows.associate { row ->
+                File(row.entry.jarPath).absolutePath to (row.enabled.isSelected to row.configValues())
+            }
+        } else {
+            cardSeed
+        }
         cardsPanel.removeAll()
         cardRows.clear()
         if (catalog.entries().isEmpty()) {
@@ -799,7 +1051,8 @@ private class WizardDialog(
         }
         for (entry in catalog.entries()) {
             val row = CardRow(entry)
-            previous[entry.jarPath]?.let { (en, cfg) ->
+            val key = File(entry.jarPath).absolutePath
+            previous[key]?.let { (en, cfg) ->
                 row.enabled.isSelected = en
                 row.applyConfig(cfg)
             }
@@ -863,16 +1116,23 @@ private class WizardDialog(
             floppy = FloppyControllerConfig(
                 enabled = fdcCheck.isSelected,
                 driveImages = if (fdcCheck.isSelected) floppies else emptyList(),
+                useInt13Shim = initial?.floppy?.useInt13Shim ?: false,
             ),
             hardDisk = HardDiskControllerConfig(
                 enabled = hdCheck.isSelected,
                 imagePath = if (hdCheck.isSelected) hdImageField.text.trim().ifEmpty { null } else null,
+                secondImagePath = initial?.hardDisk?.secondImagePath,
                 provisionBytes = hardDiskBytes(),
                 bootFromDisk = hdCheck.isSelected && bootHdCheck.isSelected,
                 ioBase = parseHexField(hdIoField.text, 0x320),
                 irq = hdIrqSpinner.value as Int,
                 dmaChannel = hdDmaSpinner.value as Int,
+                useInt13Shim = initial?.hardDisk?.useInt13Shim ?: false,
+                useHostFixedDiskBios = initial?.hardDisk?.useHostFixedDiskBios ?: false,
                 fixedDiskRomPath = fdromField.text.trim().ifEmpty { null },
+                cylinders = initial?.hardDisk?.cylinders,
+                heads = initial?.hardDisk?.heads,
+                sectorsPerTrack = initial?.hardDisk?.sectorsPerTrack,
             ),
             cards = cardRows.map {
                 CardSelection(it.entry.jarPath, it.entry.factory, it.enabled.isSelected, it.configValues())
@@ -887,14 +1147,14 @@ private class WizardDialog(
         stepSubtitle.text = step.subtitle
         cardLayout.show(pages, step.name)
         updateDriveSections()
-        steps.forEachIndexed { i, s ->
+        steps.forEachIndexed { i, _ ->
             val label = stepLabels[i]
             when {
                 i == stepIndex -> {
                     label.text = stepLabelText(i, STEP_MARKER_ACTIVE)
                     label.font = label.font.deriveFont(Font.BOLD)
                 }
-                i < stepIndex -> {
+                mode == WizardMode.SETTINGS || i < stepIndex -> {
                     label.text = stepLabelText(i, STEP_MARKER_DONE)
                     label.font = label.font.deriveFont(Font.PLAIN)
                 }
@@ -905,7 +1165,11 @@ private class WizardDialog(
             }
         }
         backButton.isEnabled = stepIndex > 0
-        nextButton.text = if (step == WizardStep.REVIEW) finishButtonLabel else "Next"
+        nextButton.text = when {
+            mode == WizardMode.SETTINGS -> "Save"
+            step == WizardStep.REVIEW -> finishButtonLabel
+            else -> "Next"
+        }
         if (step == WizardStep.REVIEW) refreshReview()
     }
 
@@ -916,11 +1180,15 @@ private class WizardDialog(
 
     private fun goTo(index: Int) {
         if (index < 0 || index > steps.lastIndex) return
-        if (index > stepIndex && !validateBeforeLeaving(stepIndex)) return
+        if (mode == WizardMode.CREATE && index > stepIndex && !validateBeforeLeaving(stepIndex)) return
         showStep(index)
     }
 
     private fun onNextOrStart() {
+        if (mode == WizardMode.SETTINGS) {
+            commitStart()
+            return
+        }
         if (steps[stepIndex] == WizardStep.REVIEW) {
             commitStart(); return
         }
@@ -930,6 +1198,17 @@ private class WizardDialog(
 
     private fun validateBeforeLeaving(index: Int): Boolean {
         when (steps[index]) {
+            WizardStep.GENERAL -> {
+                if (nameField.text.trim().isEmpty()) {
+                    JOptionPane.showMessageDialog(
+                        this,
+                        "VM name is required.",
+                        "General",
+                        JOptionPane.WARNING_MESSAGE,
+                    )
+                    return false
+                }
+            }
             WizardStep.ROMS -> {
                 val u18 = u18Field.text.trim()
                 val u19 = u19Field.text.trim()
@@ -968,6 +1247,12 @@ private class WizardDialog(
         val setup = currentSetup()
         val report = ConfigValidator.validate(setup)
         val sb = StringBuilder()
+        if (mode == WizardMode.SETTINGS) {
+            sb.appendLine("GENERAL")
+            sb.appendLine("───────")
+            sb.appendLine("Name:      ${nameField.text.trim()}")
+            sb.appendLine()
+        }
         sb.appendLine("SYSTEM ROMs")
         sb.appendLine("───────────")
         sb.appendLine("U18:       ${u18Field.text.trim()}")
@@ -976,6 +1261,7 @@ private class WizardDialog(
         sb.appendLine()
         sb.appendLine("MOTHERBOARD")
         sb.appendLine("───────────")
+        sb.appendLine("CPU:       ${setup.motherboard.cpu.label}")
         sb.appendLine("Memory:    ${setup.motherboard.baseMemoryKb} KB")
         sb.appendLine("8087:      ${if (setup.motherboard.mathCoprocessor) "yes" else "no"}")
         sb.appendLine("Video SW1: ${setup.motherboard.initialVideo.label}")
@@ -1044,7 +1330,23 @@ private class WizardDialog(
     }
 
     private fun commitStart() {
-        if (!validateBeforeLeaving(steps.indexOf(WizardStep.ROMS))) return
+        if (mode == WizardMode.SETTINGS) {
+            val generalIdx = steps.indexOf(WizardStep.GENERAL)
+            if (generalIdx >= 0 && !validateBeforeLeaving(generalIdx)) {
+                showStep(generalIdx)
+                return
+            }
+        }
+        val romsIdx = steps.indexOf(WizardStep.ROMS)
+        if (romsIdx >= 0 && !validateBeforeLeaving(romsIdx)) {
+            showStep(romsIdx)
+            return
+        }
+        val adaptersIdx = steps.indexOf(WizardStep.ADAPTERS)
+        if (adaptersIdx >= 0 && !validateBeforeLeaving(adaptersIdx)) {
+            showStep(adaptersIdx)
+            return
+        }
         val setup = currentSetup()
         val report = ConfigValidator.validate(setup)
         refreshReview()
@@ -1072,11 +1374,22 @@ private class WizardDialog(
             u18RomPath = u18Field.text.trim(),
             u19RomPath = u19Field.text.trim(),
             fdromPath = fdromField.text.trim(),
+            name = nameField.text.trim(),
         )
         dispose()
     }
 
     private fun onCancel() {
+        if (mode == WizardMode.SETTINGS) {
+            val n = JOptionPane.showConfirmDialog(
+                this, "Discard changes to this virtual machine?", "Cancel",
+                JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE,
+            )
+            if (n != JOptionPane.YES_OPTION) return
+            result = null
+            dispose()
+            return
+        }
         val dirty = !graphicsCga.isSelected || !com1Check.isSelected || !fdcCheck.isSelected ||
             hdCheck.isSelected || floppyFields.size != (if (preferredFloppy() != null) 1 else 0) ||
             cardRows.any { it.enabled.isSelected }

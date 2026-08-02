@@ -25,7 +25,7 @@ Toolbar:
 | Button | Action |
 |--------|--------|
 | **New…** | Create VM wizard (includes ROMs) → name |
-| **Edit…** | Rename / replace ROM snapshots (VM must be stopped or in error) |
+| **Edit…** | Full VM settings dialog (stopped / error only) |
 | **Networks…** | Manage virtual NAT networks |
 | **Start** / **Stop** | Run or cooperatively stop the selected VM |
 | **Console** | Open the CGA console (VM must be starting, running, or paused) |
@@ -101,12 +101,14 @@ Summary plus validation. **Create** returns the setup to the manager (CLI uses
 
 ![Review](screenshots/02-wizard-review.png)
 
-### Edit ROMs (after create)
+### Edit settings (after create)
 
-**Edit…** on a stopped VM prompts for a new name, then the ROM picker to replace
-U18/U19/fdrom snapshot sources. Unchanged paths keep the existing snapshots.
+**Edit…** on a stopped VM opens a **settings** dialog with the same categories as
+the create wizard (General, ROMs, System, Adapters, Drives, Network, Expansion,
+Review). Click a category in the sidebar; **Save** applies changes and refreshes
+ROM snapshots when paths change.
 
-![Edit ROM picker](screenshots/03-rom-picker.png)
+![VM settings](screenshots/03-vm-settings.png)
 
 ---
 

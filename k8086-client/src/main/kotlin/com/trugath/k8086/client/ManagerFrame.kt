@@ -234,34 +234,34 @@ class ManagerFrame(
         if (s.state != VmState.Stopped && s.state != VmState.Error) {
             JOptionPane.showMessageDialog(
                 this,
-                "Stop the VM before editing its definition or ROM snapshots.",
+                "Stop the VM before editing its definition.",
                 "Edit",
                 JOptionPane.WARNING_MESSAGE,
             )
             return
         }
         val def = host.getDefinition(s.id) ?: return
-        val name = JOptionPane.showInputDialog(this, "VM name:", def.name)
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?: return
-        val roms = RomPickerDialog.show(
-            this,
-            "Edit system ROMs",
-            def.u18RomPath,
-            def.u19RomPath,
-            def.hardDisk.fixedDiskRomPath ?: SystemRomDefaults.resolveFdrom(),
-            note = "Browse to replace ROM snapshots (only while the VM is shut down). Unchanged paths keep the existing snapshots.",
-        ) ?: return
-        try {
-            host.updateVm(
-                def.copy(
-                    name = name,
-                    u18RomPath = roms.u18,
-                    u19RomPath = roms.u19,
-                    hardDisk = def.hardDisk.copy(fixedDiskRomPath = roms.fdrom),
-                ),
+        val result = try {
+            StartWizard.showSettings(def, host.network())
+        } catch (t: Throwable) {
+            JOptionPane.showMessageDialog(
+                this,
+                t.message ?: t.toString(),
+                "Edit virtual machine",
+                JOptionPane.ERROR_MESSAGE,
             )
+            return
+        } ?: return
+        val name = result.name.trim().ifEmpty { def.name }
+        val updated = SetupMapper.fromMachineSetup(
+            result.setup,
+            name,
+            result.u18RomPath,
+            result.u19RomPath,
+            id = def.id,
+        )
+        try {
+            host.updateVm(updated)
             refreshList(preserveSelection = true)
         } catch (ex: Exception) {
             JOptionPane.showMessageDialog(this, ex.message, "Edit VM", JOptionPane.ERROR_MESSAGE)
