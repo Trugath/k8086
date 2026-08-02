@@ -16,7 +16,8 @@ class EmsWindowCardFactory : IsaCardFactory {
     override fun descriptor() = CardDescriptor(
         id = "com.trugath.k8086.cards.ems-window",
         name = "EMS Page Frame",
-        description = "LIM-style 64 KB page frame with remappable 16 KB windows (not a full EMM driver).",
+        description = "LIM-style 64 KB page frame with remappable 16 KB windows " +
+            "(pair with rmDOS EMM.SYS; write FFh to unmap a window).",
         category = "Memory",
         fields = listOf(
             ConfigField(
@@ -58,6 +59,7 @@ class EmsWindowCardFactory : IsaCardFactory {
  * - 64 KB page frame at [frameBase] (default D000:0), four 16 KB windows
  * - Backing store of [pageCount] × 16 KB logical pages
  * - I/O [portBase]+0..3: write logical page index for window 0..3; read returns mapping
+ * - Write `0xFF` to unmap a window (reads float `0xFF`, writes ignored)
  *
  * Config: `frame=0xD0000`, `port=0x260`, `pages=16`
  */
@@ -68,6 +70,11 @@ class EmsWindowCard(
 ) : IsaCard {
     override val id = "com.trugath.k8086.cards.ems-window"
     override val name = "EMS Window (${pageCount * 16} KB backing @ ${frameBase.toString(16)})"
+
+    companion object {
+        /** Page index written/read when a window is unmapped. */
+        const val UNMAPPED = 0xFF
+    }
 
     private val pageSize = 0x4000
     private val backing = ByteArray(pageCount * pageSize)
@@ -96,23 +103,31 @@ class EmsWindowCard(
 
             override fun ioWriteByte(port: Int, value: Int) {
                 val w = port - portBase
-                if (w in 0..3) {
-                    map[w] = (value and 0xFF).coerceIn(0, pageCount - 1)
+                if (w !in 0..3) return
+                val v = value and 0xFF
+                map[w] = when {
+                    v == UNMAPPED -> UNMAPPED
+                    v < pageCount -> v
+                    else -> UNMAPPED
                 }
             }
         }, portBase..(portBase + 3))
     }
 
     private inner class WindowDevice(private val window: Int) : MemoryDevice {
-        private fun phys(offset: Int): Int = map[window] * pageSize + offset
+        private fun phys(offset: Int): Int? {
+            val page = map[window]
+            if (page == UNMAPPED || page !in 0 until pageCount) return null
+            return page * pageSize + offset
+        }
 
         override fun memReadByte(offset: Int): Int {
-            val p = phys(offset)
+            val p = phys(offset) ?: return 0xFF
             return if (p in backing.indices) backing[p].toInt() and 0xFF else 0xFF
         }
 
         override fun memWriteByte(offset: Int, value: Int) {
-            val p = phys(offset)
+            val p = phys(offset) ?: return
             if (p in backing.indices) backing[p] = (value and 0xFF).toByte()
         }
     }

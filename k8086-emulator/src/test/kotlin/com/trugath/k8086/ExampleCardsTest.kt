@@ -7,6 +7,7 @@ import com.trugath.k8086.isa.*
 import com.trugath.k8086.storage.*
 import com.trugath.k8086.video.*
 import com.trugath.k8086.cards.adlib.AdlibCardFactory
+import com.trugath.k8086.cards.emswindow.EmsWindowCard
 import com.trugath.k8086.cards.emswindow.EmsWindowCardFactory
 import com.trugath.k8086.cards.heartbeat.HeartbeatCardFactory
 import com.trugath.k8086.cards.ramumb.RamUmbCardFactory
@@ -234,5 +235,31 @@ class ExampleCardsTest {
         assertThrows(IllegalArgumentException::class.java) {
             card.attach(IsaHostImpl(machine, card.id))
         }
+    }
+
+    @Test
+    fun emsWindowUnmapFloatsAndIgnoresWrites() {
+        val card = EmsWindowCardFactory().create(emptyMap())
+        card.attach(IsaHostImpl(machine, card.id))
+
+        machine.cpu.writePhysByte(0xD0000, 0xAA)
+        machine.ioBus.deviceFor(0x260)!!.ioWriteByte(0x260, EmsWindowCard.UNMAPPED)
+        assertEquals(EmsWindowCard.UNMAPPED, machine.ioBus.deviceFor(0x260)!!.ioReadByte(0x260))
+        assertEquals(0xFF, machine.cpu.readPhysByte(0xD0000))
+        machine.cpu.writePhysByte(0xD0000, 0x55)
+        assertEquals(0xFF, machine.cpu.readPhysByte(0xD0000))
+
+        machine.ioBus.deviceFor(0x260)!!.ioWriteByte(0x260, 0)
+        assertEquals(0xAA, machine.cpu.readPhysByte(0xD0000))
+    }
+
+    @Test
+    fun emsWindowOutOfRangePageUnmaps() {
+        val card = EmsWindowCardFactory().create(mapOf("pages" to "4"))
+        card.attach(IsaHostImpl(machine, card.id))
+
+        machine.ioBus.deviceFor(0x260)!!.ioWriteByte(0x260, 4)
+        assertEquals(EmsWindowCard.UNMAPPED, machine.ioBus.deviceFor(0x260)!!.ioReadByte(0x260))
+        assertEquals(0xFF, machine.cpu.readPhysByte(0xD0000))
     }
 }

@@ -68,5 +68,21 @@ Set motherboard `baseMemoryKb=256` in the wizard (or CLI motherboard options). `
 defaults assume conventional starts at `0x40000` (256K) and fills to 640K, plus 128K UMB at
 `D0000`. POST probes COM1/COM2 and LPT1/LPT2 into the BDA; INT 12h reports 640K.
 
+### 5155/5160 + EMS page frame
+
+XT machines use LIM expanded memory (not XMS). Default `ems-window` frame is `D0000`–`DFFFF`,
+which collides with default `mem-expansion` UMB. Disable UMB when combining both:
+
+```bash
+./gradlew :cards:mem-expansion:jar :cards:ems-window:jar
+
+./gradlew :k8086-emulator:run --args="disks/fd.img \
+  --card cards/mem-expansion/build/libs/mem-expansion-1.0-SNAPSHOT.jar,umbBase=0 \
+  --card cards/ems-window/build/libs/ems-window-1.0-SNAPSHOT.jar"
+```
+
+Guest `DEVICE=A:\BIN\EMM.SYS` (rmDOS) programs ports `0x260`–`0x263` and the `D000` frame.
+Write `0xFF` to a window port to unmap it (bus float).
+
 Cards map I/O, memory, IRQs, and DMA only through `IsaHost` during `attach`.
 Network cards also call `IsaHost.attachNic(networkId, mac)` to join a host virtual network.
