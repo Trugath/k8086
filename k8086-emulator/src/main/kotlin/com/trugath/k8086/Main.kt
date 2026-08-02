@@ -34,11 +34,11 @@ fun main(args: Array<String>) {
             printUsage()
             exitProcess(2)
         }
-        val setup = StartWizard.show(cliNetworks) ?: run {
+        val wizard = StartWizard.show(cliNetworks) ?: run {
             println("Setup cancelled.")
             return
         }
-        runSetup(u18, u19, setup)
+        runSetup(wizard.u18RomPath, wizard.u19RomPath, wizard.setup)
         return
     }
 

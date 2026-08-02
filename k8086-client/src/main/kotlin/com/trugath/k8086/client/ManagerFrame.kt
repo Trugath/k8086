@@ -198,8 +198,13 @@ class ManagerFrame(
     }
 
     private fun onNewVm() {
-        val setup = try {
-            StartWizard.show(host.network(), finishButtonLabel = "Create")
+        val wizard = try {
+            StartWizard.show(
+                host.network(),
+                finishButtonLabel = "Create",
+                defaultU18 = defaultU18,
+                defaultU19 = defaultU19,
+            )
         } catch (t: Throwable) {
             JOptionPane.showMessageDialog(
                 this,
@@ -213,14 +218,7 @@ class ManagerFrame(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?: return
-        val roms = RomPickerDialog.show(
-            this,
-            "System ROMs",
-            defaultU18,
-            defaultU19,
-            note = "Defaults are rmDOS U18/U19. Browse to override. Images are copied into the VM as immutable snapshots.",
-        ) ?: return
-        val def = SetupMapper.fromMachineSetup(setup, name, roms.first, roms.second)
+        val def = SetupMapper.fromMachineSetup(wizard.setup, name, wizard.u18RomPath, wizard.u19RomPath)
         try {
             host.createVm(def)
             refreshList()

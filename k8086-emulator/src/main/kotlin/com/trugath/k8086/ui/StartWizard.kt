@@ -16,6 +16,7 @@ import com.trugath.k8086.config.ValidationSeverity
 import com.trugath.k8086.cpu.XT_HARD_DISK_BYTES
 import com.trugath.k8086.protocol.NetworkApi
 import com.trugath.k8086.protocol.NetworkDefinition
+import com.trugath.k8086.protocol.SystemRomDefaults
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Color
@@ -58,24 +59,38 @@ import javax.swing.border.EmptyBorder
 import javax.swing.filechooser.FileNameExtensionFilter
 
 /**
- * VM-style setup wizard: system adapters (graphics / FDC / HD controller / COM1),
+ * Result of [StartWizard.show]: machine setup plus chosen system ROM sources.
+ * Workstation snapshots copy U18/U19 (and fdrom beside them) into the VM directory.
+ */
+data class WizardResult(
+    val setup: MachineSetup,
+    val u18RomPath: String,
+    val u19RomPath: String,
+)
+
+/**
+ * VM-style setup wizard: system ROMs, adapters (graphics / FDC / HD controller / COM1),
  * virtual networks, drive media, ISA expansion cards, then Review → finish.
  *
  * @param finishButtonLabel label on the Review step (CLI uses "Start"; the
- *   workstation New-VM flow uses "Create" because naming/ROMs still follow).
+ *   workstation New-VM flow uses "Create").
+ * @param defaultU18 initial U18 path (defaults to [SystemRomDefaults]).
+ * @param defaultU19 initial U19 path.
  */
 object StartWizard {
     fun show(
         networks: com.trugath.k8086.protocol.NetworkApi? = null,
         finishButtonLabel: String = "Start",
-    ): MachineSetup? {
+        defaultU18: String = SystemRomDefaults.resolve().first,
+        defaultU19: String = SystemRomDefaults.resolve().second,
+    ): WizardResult? {
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName())
         } catch (_: Exception) {
         }
-        var result: MachineSetup? = null
+        var result: WizardResult? = null
         val showDialog = Runnable {
-            val dialog = WizardDialog(networks, finishButtonLabel)
+            val dialog = WizardDialog(networks, finishButtonLabel, defaultU18, defaultU19)
             dialog.isVisible = true
             result = dialog.result
             dialog.catalog.close()
@@ -97,6 +112,8 @@ object StartWizard {
     fun captureSteps(
         networks: com.trugath.k8086.protocol.NetworkApi? = null,
         finishButtonLabel: String = "Create",
+        defaultU18: String = SystemRomDefaults.resolve().first,
+        defaultU19: String = SystemRomDefaults.resolve().second,
         onStep: (stepName: String, dialog: JDialog) -> Boolean,
     ) {
         try {
@@ -105,7 +122,7 @@ object StartWizard {
         }
         lateinit var dialog: WizardDialog
         SwingUtilities.invokeAndWait {
-            dialog = WizardDialog(networks, finishButtonLabel)
+            dialog = WizardDialog(networks, finishButtonLabel, defaultU18, defaultU19)
             dialog.isModal = false
             dialog.defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
             dialog.isVisible = true
@@ -135,6 +152,7 @@ private const val SIDEBAR_TEXT_SLACK = 16
 
 private enum class WizardStep(val title: String, val subtitle: String) {
     WELCOME("Welcome", "Create an IBM 5155 / XT virtual machine"),
+    ROMS("ROMs", "U18 / U19 system BIOS images"),
     SYSTEM("System", "Memory, 8087, and motherboard switches"),
     ADAPTERS("Adapters", "Graphics, serial, floppy & hard-disk controllers"),
     DRIVES("Drives", "Floppy and hard-disk media"),
@@ -146,12 +164,18 @@ private enum class WizardStep(val title: String, val subtitle: String) {
 private class WizardDialog(
     private val networks: com.trugath.k8086.protocol.NetworkApi?,
     private val finishButtonLabel: String = "Start",
+    defaultU18: String,
+    defaultU19: String,
 ) : JDialog(null as JFrame?, "k8086 — Create Virtual Machine", true) {
     val catalog = CardCatalog().also { it.refresh() }
-    var result: MachineSetup? = null
+    var result: WizardResult? = null
 
     private var stepIndex = 0
     private val steps = WizardStep.entries
+
+    // --- System ROMs ---
+    private val u18Field = JTextField(defaultU18, 28)
+    private val u19Field = JTextField(defaultU19, 28)
 
     // --- System (motherboard) ---
     private val cpuCombo = JComboBox(CpuModel.entries.map { it.label }.toTypedArray()).also {
@@ -244,6 +268,7 @@ private class WizardDialog(
         refreshNetworkList()
 
         addPage(WizardStep.WELCOME, buildWelcomePage())
+        addPage(WizardStep.ROMS, buildRomsPage())
         addPage(WizardStep.SYSTEM, buildSystemPage())
         addPage(WizardStep.ADAPTERS, buildAdaptersPage())
         addPage(WizardStep.DRIVES, buildDrivesPage())
@@ -472,6 +497,7 @@ private class WizardDialog(
         p.add(JLabel("<html><body style='width:460px'>" +
             "<p>Configure an IBM 5155 / XT the way you would set motherboard switches and cards:</p>" +
             "<ul>" +
+            "<li><b>ROMs</b> — U18 / U19 system BIOS (snapshotted into the VM)</li>" +
             "<li><b>System</b> — RAM size, 8087, initial video (SW1)</li>" +
             "<li><b>Adapters</b> — CGA, COM1, floppy &amp; hard-disk controllers</li>" +
             "<li><b>Drives</b> — floppy / HD images</li>" +
@@ -481,6 +507,42 @@ private class WizardDialog(
             "</body></html>"))
         p.add(Box.createVerticalGlue())
     }
+
+    private fun buildRomsPage(): JPanel = paddedColumn().also { p ->
+        p.add(sectionTitle("System BIOS (U18 / U19)"))
+        p.add(JLabel("<html><body style='width:480px'>" +
+            "Defaults are the shipped <b>rmDOS</b> clean-room XT ROMs. Browse to override for this VM. " +
+            "Images are copied into the VM as immutable snapshots; <code>fdrom.bin</code> beside U18 " +
+            "is included automatically when present (needed for hard-disk INT 13h)." +
+            "</body></html>").also { it.alignmentX = LEFT_ALIGNMENT })
+        p.add(Box.createVerticalStrut(12))
+        p.add(romPathRow("U18 ROM (32 KB):", u18Field))
+        p.add(Box.createVerticalStrut(8))
+        p.add(romPathRow("U19 ROM (8 KB):", u19Field))
+        p.add(Box.createVerticalStrut(12))
+        p.add(JButton("Restore shipped defaults").also { b ->
+            b.alignmentX = LEFT_ALIGNMENT
+            b.addActionListener {
+                val (u18, u19) = SystemRomDefaults.resolve()
+                u18Field.text = u18
+                u19Field.text = u19
+            }
+        })
+        p.add(Box.createVerticalGlue())
+    }
+
+    private fun romPathRow(label: String, field: JTextField): JPanel =
+        JPanel(BorderLayout(6, 0)).also {
+            it.alignmentX = LEFT_ALIGNMENT
+            it.add(JLabel(label), BorderLayout.WEST)
+            it.add(field, BorderLayout.CENTER)
+            it.add(JButton("Browse…").also { b ->
+                b.addActionListener {
+                    chooseFile(field, "System ROM", arrayOf("bin", "rom"), open = true, startDir = File("roms"))
+                }
+            }, BorderLayout.EAST)
+            it.maximumSize = Dimension(Int.MAX_VALUE, it.preferredSize.height)
+        }
 
     private fun buildSystemPage(): JPanel = paddedColumn().also { p ->
         p.add(sectionTitle("CPU"))
@@ -693,7 +755,7 @@ private class WizardDialog(
 
     private fun buildReviewPage(): JPanel = JPanel(BorderLayout(8, 8)).also {
         it.border = EmptyBorder(8, 16, 8, 16)
-        it.add(JLabel("Review adapters, media, networks, and cards — then $finishButtonLabel."), BorderLayout.NORTH)
+        it.add(JLabel("Review ROMs, adapters, media, networks, and cards — then $finishButtonLabel."), BorderLayout.NORTH)
         it.add(JScrollPane(summaryArea), BorderLayout.CENTER)
     }
 
@@ -735,10 +797,20 @@ private class WizardDialog(
         cardsPanel.repaint()
     }
 
-    private fun chooseFile(field: JTextField, title: String, exts: Array<String>, open: Boolean) {
-        val chooser = JFileChooser(File("disks").takeIf { it.isDirectory } ?: File(".")).apply {
+    private fun chooseFile(
+        field: JTextField,
+        title: String,
+        exts: Array<String>,
+        open: Boolean,
+        startDir: File? = null,
+    ) {
+        val preferred = startDir?.takeIf { it.isDirectory }
+            ?: File("disks").takeIf { it.isDirectory }
+            ?: File(".")
+        val chooser = JFileChooser(preferred).apply {
             dialogTitle = title
             fileFilter = FileNameExtensionFilter(exts.joinToString("/") { "*.$it" }, *exts)
+            selectedFile = File(field.text).takeIf { it.parentFile?.isDirectory == true }
         }
         val result = if (open) chooser.showOpenDialog(this) else chooser.showSaveDialog(this)
         if (result == JFileChooser.APPROVE_OPTION) field.text = chooser.selectedFile.absolutePath
@@ -842,11 +914,36 @@ private class WizardDialog(
     }
 
     private fun validateBeforeLeaving(index: Int): Boolean {
-        if (steps[index] == WizardStep.ADAPTERS && hdCheck.isSelected) {
-            if (hdImageField.text.trim().isEmpty()) {
-                JOptionPane.showMessageDialog(this, "HD controller needs an image path (or disable the controller).")
-                return false
+        when (steps[index]) {
+            WizardStep.ROMS -> {
+                val u18 = u18Field.text.trim()
+                val u19 = u19Field.text.trim()
+                if (u18.isEmpty() || u19.isEmpty()) {
+                    JOptionPane.showMessageDialog(
+                        this,
+                        "Both U18 and U19 ROM paths are required.",
+                        "System ROMs",
+                        JOptionPane.WARNING_MESSAGE,
+                    )
+                    return false
+                }
+                if (!File(u18).isFile || !File(u19).isFile) {
+                    JOptionPane.showMessageDialog(
+                        this,
+                        "ROM file(s) not found:\n  $u18\n  $u19",
+                        "System ROMs",
+                        JOptionPane.ERROR_MESSAGE,
+                    )
+                    return false
+                }
             }
+            WizardStep.ADAPTERS -> {
+                if (hdCheck.isSelected && hdImageField.text.trim().isEmpty()) {
+                    JOptionPane.showMessageDialog(this, "HD controller needs an image path (or disable the controller).")
+                    return false
+                }
+            }
+            else -> { }
         }
         return true
     }
@@ -855,6 +952,13 @@ private class WizardDialog(
         val setup = currentSetup()
         val report = ConfigValidator.validate(setup)
         val sb = StringBuilder()
+        sb.appendLine("SYSTEM ROMs")
+        sb.appendLine("───────────")
+        sb.appendLine("U18:       ${u18Field.text.trim()}")
+        sb.appendLine("U19:       ${u19Field.text.trim()}")
+        val fdromBeside = File(File(u18Field.text.trim()).parentFile ?: File("."), "fdrom.bin")
+        sb.appendLine("fdrom:     ${if (fdromBeside.isFile) fdromBeside.path else "(not beside U18 — HD INT 13h may need roms/fdrom.bin)"}")
+        sb.appendLine()
         sb.appendLine("MOTHERBOARD")
         sb.appendLine("───────────")
         sb.appendLine("Memory:    ${setup.motherboard.baseMemoryKb} KB")
@@ -925,6 +1029,7 @@ private class WizardDialog(
     }
 
     private fun commitStart() {
+        if (!validateBeforeLeaving(steps.indexOf(WizardStep.ROMS))) return
         val setup = currentSetup()
         val report = ConfigValidator.validate(setup)
         refreshReview()
@@ -947,7 +1052,11 @@ private class WizardDialog(
             )
             if (n != JOptionPane.YES_OPTION) return
         }
-        result = setup
+        result = WizardResult(
+            setup = setup,
+            u18RomPath = u18Field.text.trim(),
+            u19RomPath = u19Field.text.trim(),
+        )
         dispose()
     }
 

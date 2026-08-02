@@ -30,8 +30,9 @@ export K8086_U19_ROM=/path/to/u19.bin
 
 **Workstation (multi-VM):**
 
-- **New…** — after the hardware wizard, a System ROMs dialog defaults to
-  `roms/u18.bin` / `roms/u19.bin`. Browse to override for that VM only.
+- **New…** — the create wizard includes a **ROMs** step (defaults `roms/u18.bin` /
+  `roms/u19.bin`). Browse to override for that VM; images are snapshotted under
+  `vms/<id>/roms/` (including `fdrom.bin` when present beside U18).
 - **Edit…** — available when the VM is **stopped**. Change the name and/or pick
   new U18/U19 images; the host re-copies them into the VM’s ROM snapshots.
 
