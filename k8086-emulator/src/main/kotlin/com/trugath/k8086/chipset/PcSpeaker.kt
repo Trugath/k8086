@@ -12,6 +12,9 @@ import javax.sound.sampled.SourceDataLine
  *
  * Output is unsigned 8-bit PCM: silence is the midpoint (0x80). Skipping [SourceDataLine]
  * writes while muted underruns the device and clicks, so mute still feeds silence.
+ *
+ * Periods below the host Nyquist limit (ultrasonic PIT2 rates games often leave
+ * programmed during rests) are rendered as silence so they do not alias into hiss.
  */
 class PcSpeaker(
     private val pit: Pit8253,
@@ -36,7 +39,7 @@ class PcSpeaker(
 
     /** True when the speaker data enable and PIT2 square-wave output are both high. */
     fun isSounding(): Boolean =
-        speakerDataEnabled() && pit.timer2Output()
+        speakerAudible() && pit.timer2Output()
 
     /** Advance audio by [cpuCycles] at ~4.77 MHz CPU clock. */
     fun tickCpuCycles(cpuCycles: Int) {
@@ -63,9 +66,22 @@ class PcSpeaker(
 
     private fun speakerDataEnabled(): Boolean = (ppi.portBValue() and 0x02) != 0
 
+    private fun speakerGateEnabled(): Boolean = (ppi.portBValue() and 0x01) != 0
+
+    /**
+     * Guest wants an audible square wave: data bit on, gate on, and PIT2 period
+     * representable at [SAMPLE_RATE] (otherwise the square wave aliases to noise).
+     */
+    private fun speakerAudible(): Boolean {
+        if (!speakerDataEnabled() || !speakerGateEnabled()) return false
+        val reload = pit.reloadValue(2)
+        val period = if (reload == 0) 0x10000 else reload
+        return period >= MIN_PIT_PERIOD
+    }
+
     /** Unsigned 8-bit sample for the current speaker / mute state. */
     internal fun sampleLevel(): Byte {
-        if (muted || !speakerDataEnabled()) return SILENCE
+        if (muted || !speakerAudible()) return SILENCE
         return if (pit.timer2Output()) HIGH else LOW
     }
 
@@ -84,6 +100,14 @@ class PcSpeaker(
     companion object {
         const val SAMPLE_RATE = 22050.0
         const val CPU_HZ = 4_772_727.0
+        /** PIT input clock (Hz). */
+        const val PIT_HZ = 1_193_182.0
+        /**
+         * Minimum mode-3 reload whose fundamental is ≤ Nyquist at [SAMPLE_RATE].
+         * Smaller divisors (common "off" / rest programming) alias to hiss if rendered.
+         */
+        val MIN_PIT_PERIOD: Int =
+            ((PIT_HZ / (SAMPLE_RATE / 2.0)) + 0.999).toInt().coerceAtLeast(2)
         /** Unsigned PCM midpoint — true digital silence for this line format. */
         const val SILENCE: Byte = 0x80.toByte()
         private const val AMP = 0x30

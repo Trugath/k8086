@@ -21,11 +21,11 @@ class PcSpeakerTest {
         val ppi = Ppi8255(pit, pic)
         val speaker = PcSpeaker(pit, ppi, enableAudio = false)
 
-        // Gate timer 2 and enable speaker data; program a short reload so output toggles.
+        // Gate timer 2 and enable speaker data; program an audible reload.
         ppi.ioWriteByte(0x61, 0x03) // PB0 gate + PB1 data
         pit.ioWriteByte(0x43, 0xB6) // counter 2, lo/hi, mode 3
-        pit.ioWriteByte(0x42, 0x20)
         pit.ioWriteByte(0x42, 0x00)
+        pit.ioWriteByte(0x42, 0x10) // reload 0x1000
         pit.tickCpuCycles(200_000)
 
         // After enough ticks, output has toggled at least once; sounding tracks AND of PB1 and output.
@@ -42,7 +42,33 @@ class PcSpeakerTest {
         val pit = Pit8253(pic)
         val ppi = Ppi8255(pit, pic)
         val speaker = PcSpeaker(pit, ppi, enableAudio = false)
+        // Program an audible tone, freeze PIT2 output high, then drop only the gate.
+        ppi.ioWriteByte(0x61, 0x03)
+        pit.ioWriteByte(0x43, 0xB6)
+        pit.ioWriteByte(0x42, 0x00)
+        pit.ioWriteByte(0x42, 0x10) // reload 0x1000 — well above Nyquist floor
+        pit.tickCpuCycles(500_000)
+        // Force output high if needed by ticking until true, then close gate.
+        var steps = 0
+        while (!pit.timer2Output() && steps++ < 50) pit.tickCpuCycles(50_000)
+        assertTrue(pit.timer2Output() || steps > 0)
         ppi.ioWriteByte(0x61, 0x02) // PB1 data only — gate off
+        assertFalse(speaker.isSounding())
+        assertEquals(PcSpeaker.SILENCE, speaker.sampleLevel(), "gate off must be midpoint silence")
+    }
+
+    @Test
+    fun ultrasonicPit2RendersAsSilence() {
+        val pic = Pic8259()
+        val pit = Pit8253(pic)
+        val ppi = Ppi8255(pit, pic)
+        val speaker = PcSpeaker(pit, ppi, enableAudio = false)
+        ppi.ioWriteByte(0x61, 0x03)
+        pit.ioWriteByte(0x43, 0xB6)
+        pit.ioWriteByte(0x42, 0x02) // reload 2 — far above Nyquist at 22.05 kHz
+        pit.ioWriteByte(0x42, 0x00)
+        pit.tickCpuCycles(100_000)
+        assertEquals(PcSpeaker.SILENCE, speaker.sampleLevel())
         assertFalse(speaker.isSounding())
     }
 
@@ -70,13 +96,13 @@ class PcSpeakerTest {
         speaker.muted = true
         ppi.ioWriteByte(0x61, 0x03)
         pit.ioWriteByte(0x43, 0xB6)
-        pit.ioWriteByte(0x42, 0x20)
         pit.ioWriteByte(0x42, 0x00)
+        pit.ioWriteByte(0x42, 0x10) // reload 0x1000 — audible at 22.05 kHz
         pit.tickCpuCycles(200_000)
         assertEquals(PcSpeaker.SILENCE, speaker.sampleLevel(), "mute must feed midpoint silence")
 
         speaker.muted = false
-        // With data enabled, level is HIGH or LOW around midpoint — never raw 0x00.
+        // With data+gate enabled and a representable period, level is HIGH or LOW.
         val level = speaker.sampleLevel().toInt() and 0xFF
         assertTrue(level == (PcSpeaker.HIGH.toInt() and 0xFF) || level == (PcSpeaker.LOW.toInt() and 0xFF))
     }
