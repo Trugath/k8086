@@ -443,6 +443,8 @@ internal class Cga(
                 val p = CgaPanel(img)
                 panel = p
                 p.isFocusable = true
+                // Keep Tab as a guest scancode (do not focus-traverse onto Ctrl+Alt+Del).
+                p.focusTraversalKeysEnabled = false
                 p.addKeyListener(object : KeyAdapter() {
                     override fun keyPressed(e: KeyEvent) {
                         when (e.keyCode) {
@@ -535,6 +537,8 @@ internal class Cga(
         val bar = JPanel(BorderLayout())
         val left = JPanel(FlowLayout(FlowLayout.LEFT, 6, 4))
         val cad = JButton("Ctrl+Alt+Del").apply {
+            isFocusable = false
+            isFocusPainted = false
             toolTipText = "Send Ctrl+Alt+Delete to the emulated PC"
             addActionListener {
                 controls?.onCtrlAltDelete?.invoke()
@@ -546,6 +550,8 @@ internal class Cga(
         for (drive in 0 until driveCount) {
             val label = "${'A' + drive}:"
             val btn = JButton("Change $label").apply {
+                isFocusable = false
+                isFocusPainted = false
                 toolTipText = floppyTooltip(drive, controls)
                 addActionListener {
                     promptChangeFloppy(drive, this, controls)
@@ -559,6 +565,8 @@ internal class Cga(
         val right = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 4))
         if (controls?.onTogglePause != null) {
             val pauseBtn = JButton().apply {
+                isFocusable = false
+                isFocusPainted = false
                 fun refresh() {
                     val paused = controls.isPaused?.invoke() == true
                     text = if (paused) PLAY_LABEL else PAUSE_LABEL
@@ -575,6 +583,8 @@ internal class Cga(
         }
         if (controls?.onToggleTurbo != null) {
             val turboBtn = JButton().apply {
+                isFocusable = false
+                isFocusPainted = false
                 fun refresh() {
                     val on = controls.isTurbo?.invoke() == true
                     text = TURBO_LABEL
@@ -592,6 +602,8 @@ internal class Cga(
         }
         if (controls?.onToggleAudio != null) {
             val audioBtn = JButton().apply {
+                isFocusable = false
+                isFocusPainted = false
                 fun refresh() {
                     val muted = controls.isAudioMuted?.invoke() == true
                     text = if (muted) AUDIO_MUTED_LABEL else AUDIO_ON_LABEL

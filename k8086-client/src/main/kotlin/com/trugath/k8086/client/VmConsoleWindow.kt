@@ -49,6 +49,9 @@ class VmConsoleWindow(
         defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
         layout = BorderLayout()
         display.isFocusable = true
+        // Keep Tab/Shift+Tab as guest scancodes — do not move Swing focus onto toolbar
+        // (Ctrl+Alt+Del is default-capable; Tab then Enter would warm-boot the guest).
+        display.focusTraversalKeysEnabled = false
         display.addKeyListener(object : KeyAdapter() {
             override fun keyPressed(e: KeyEvent) {
                 XtScanCodes.makeCode(e)?.let { host.sendScanCode(vmId, it) }
@@ -131,11 +134,8 @@ class VmConsoleWindow(
     private fun buildToolbar(): JPanel {
         val bar = JPanel(BorderLayout())
         val left = JPanel(FlowLayout(FlowLayout.LEFT, 6, 4))
-        left.add(JButton("Ctrl+Alt+Del").apply {
-            addActionListener {
-                host.sendCtrlAltDelete(vmId)
-                display.requestFocusInWindow()
-            }
+        left.add(toolbarButton("Ctrl+Alt+Del") {
+            host.sendCtrlAltDelete(vmId)
         })
         val metrics = host.metrics(vmId)
         val driveCount = metrics?.floppyPaths?.size
@@ -143,49 +143,48 @@ class VmConsoleWindow(
             ?: 0
         for (drive in 0 until driveCount) {
             val letter = "${'A' + drive}:"
-            left.add(JButton("Change $letter").apply {
-                addActionListener {
-                    promptChangeFloppy(drive, letter)
-                    display.requestFocusInWindow()
-                }
+            left.add(toolbarButton("Change $letter") {
+                promptChangeFloppy(drive, letter)
             })
         }
         bar.add(left, BorderLayout.CENTER)
 
         val right = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 4))
-        pauseButton = JButton()
-        pauseButton.addActionListener {
+        pauseButton = toolbarButton("") {
             if (host.isPaused(vmId)) host.resumeVm(vmId) else host.pauseVm(vmId)
             refreshTransportButtons()
-            display.requestFocusInWindow()
         }
-        turboButton = JButton(TURBO_LABEL)
-        turboButton.addActionListener {
+        turboButton = toolbarButton(TURBO_LABEL) {
             host.setTurbo(vmId, !host.isTurbo(vmId))
             refreshTurboButton()
-            display.requestFocusInWindow()
         }
-        audioButton = JButton()
-        audioButton.addActionListener {
+        audioButton = toolbarButton("") {
             host.setAudioMuted(vmId, !host.isAudioMuted(vmId))
             refreshAudioButton()
-            display.requestFocusInWindow()
         }
         right.add(pauseButton)
         right.add(turboButton)
         right.add(audioButton)
         if (onOpenDebug != null) {
-            right.add(JButton("Debug").also {
-                it.addActionListener {
-                    onOpenDebug.invoke()
-                    display.requestFocusInWindow()
-                }
+            right.add(toolbarButton("Debug") {
+                onOpenDebug.invoke()
             })
         }
         refreshTransportButtons()
         bar.add(right, BorderLayout.EAST)
         return bar
     }
+
+    /** Toolbar controls stay mouse-only so Tab never leaves the guest display. */
+    private fun toolbarButton(text: String, onClick: () -> Unit): JButton =
+        JButton(text).apply {
+            isFocusable = false
+            isFocusPainted = false
+            addActionListener {
+                onClick()
+                display.requestFocusInWindow()
+            }
+        }
 
     private fun refreshTransportButtons() {
         refreshPauseButton()
