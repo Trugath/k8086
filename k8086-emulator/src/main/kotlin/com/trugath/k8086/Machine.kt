@@ -17,6 +17,8 @@ import com.trugath.k8086.chipset.Ppi8255
 import com.trugath.k8086.chipset.ShutdownPort
 import com.trugath.k8086.chipset.ScanCodeInjectPort
 import com.trugath.k8086.chipset.DiskChangeInjectPort
+import com.trugath.k8086.chipset.MouseInjectPort
+import com.trugath.k8086.chipset.SerialMouseAdapter
 import com.trugath.k8086.chipset.CapturedPrintJob
 import com.trugath.k8086.chipset.ParallelPort
 import com.trugath.k8086.chipset.Uart8250
@@ -191,6 +193,7 @@ class Machine(
     val keyboard = Keyboard(pic, ppi)
     val speaker = PcSpeaker(pit, ppi, enableAudio = options.resolvedEnableAudio())
     val uart: Uart8250? = if (options.enableCom1) Uart8250(pic) else null
+    private val serialMouse: SerialMouseAdapter? = uart?.let { SerialMouseAdapter(it::enqueueRx) }
     val parallel = ParallelPort()
     val shutdownPort = ShutdownPort { requestShutdownFromPort() }
 
@@ -353,6 +356,7 @@ class Machine(
         cga?.let { video ->
             ioBus.map(video, (0x3D0..0x3DF).toList(), owner = "cga-adapter")
             video.onKeyScanCode = { code -> keyboard.enqueueScanCode(code) }
+            video.onMouseEvent = { dx, dy, buttons -> enqueueMouseEvent(dx, dy, buttons) }
             cpu.hostServices.onDosTerminate = { video.restoreTextModeIfGraphics() }
             video.hostControls = Cga.HostControls(
                 floppyDriveCount = floppyToolbarDriveCount(),
@@ -419,6 +423,11 @@ class Machine(
             ScanCodeInjectPort { code -> keyboard.enqueueScanCode(code) },
             listOf(ScanCodeInjectPort.PORT),
             owner = "scancode-inject",
+        )
+        ioBus.map(
+            MouseInjectPort { dx, dy, buttons -> enqueueMouseEvent(dx, dy, buttons) },
+            listOf(MouseInjectPort.PORT),
+            owner = "mouse-inject",
         )
         fdc?.let { controller ->
             ioBus.map(
@@ -509,6 +518,10 @@ class Machine(
     fun drainCompletedPrintJobs(): List<CapturedPrintJob> = parallel.drainCompletedJobs()
 
     fun enqueueScanCode(code: Int) = keyboard.enqueueScanCode(code)
+
+    fun enqueueMouseEvent(dx: Int, dy: Int, buttons: Int) {
+        serialMouse?.sendEvent(dx, dy, buttons)
+    }
 
     fun sendCtrlAltDelete() = keyboard.sendCtrlAltDelete()
 

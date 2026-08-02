@@ -42,6 +42,20 @@ class Uart8250Test {
     }
 
     @Test
+    fun enqueueRxFifoHoldsMultipleBytes() {
+        val uart = Uart8250(Pic8259())
+        uart.enqueueRx(0x41)
+        uart.enqueueRx(0x42)
+        uart.enqueueRx(0x43)
+        assertEquals(3, uart.rxFifoSize())
+        assertEquals(0x41, uart.ioReadByte(0x3F8))
+        assertEquals(0x42, uart.ioReadByte(0x3F8))
+        assertEquals(0x43, uart.ioReadByte(0x3F8))
+        assertEquals(0, uart.rxFifoSize())
+        assertEquals(0, uart.lineStatus() and Uart8250.LSR_DR)
+    }
+
+    @Test
     fun scratchAndModemStatusPresent() {
         val uart = Uart8250(Pic8259())
         uart.ioWriteByte(0x3FF, 0xAB)

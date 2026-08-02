@@ -217,6 +217,11 @@ interface HostApi {
     /** Drain completed LPT1 print jobs for [id] (may be empty). */
     fun pollPrintJobs(id: VmId): List<PrintJob>
     fun sendScanCode(id: VmId, code: Int)
+    /**
+     * Inject a relative Microsoft serial mouse event into COM1 (when present).
+     * [buttons]: bit0=left, bit1=right.
+     */
+    fun sendMouseEvent(id: VmId, dx: Int, dy: Int, buttons: Int)
     fun sendCtrlAltDelete(id: VmId)
     fun changeFloppy(id: VmId, drive: Int, path: String?)
     fun setConsoleFocused(id: VmId, focused: Boolean)

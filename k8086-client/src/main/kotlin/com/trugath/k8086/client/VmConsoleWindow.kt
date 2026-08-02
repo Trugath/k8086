@@ -6,6 +6,7 @@ import com.trugath.k8086.protocol.HostApi
 import com.trugath.k8086.protocol.VmId
 import com.trugath.k8086.protocol.VmState
 import java.awt.BorderLayout
+import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Graphics
@@ -15,6 +16,7 @@ import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.event.MouseMotionAdapter
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.awt.image.BufferedImage
@@ -44,6 +46,10 @@ class VmConsoleWindow(
     private lateinit var pauseButton: JButton
     private lateinit var turboButton: JButton
     private lateinit var audioButton: JButton
+    private var mouseGrabbed = false
+    private var suppressEscBreak = false
+    private var lastMouseX = 0
+    private var lastMouseY = 0
 
     init {
         defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
@@ -54,19 +60,55 @@ class VmConsoleWindow(
         display.focusTraversalKeysEnabled = false
         display.addKeyListener(object : KeyAdapter() {
             override fun keyPressed(e: KeyEvent) {
+                if (e.keyCode == KeyEvent.VK_ESCAPE && mouseGrabbed) {
+                    setMouseGrabbed(false)
+                    suppressEscBreak = true
+                    return
+                }
                 XtScanCodes.makeCode(e)?.let { host.sendScanCode(vmId, it) }
             }
             override fun keyReleased(e: KeyEvent) {
+                if (e.keyCode == KeyEvent.VK_ESCAPE && suppressEscBreak) {
+                    suppressEscBreak = false
+                    return
+                }
                 XtScanCodes.makeCode(e)?.let { host.sendScanCode(vmId, it or 0x80) }
             }
         })
         display.addMouseListener(object : MouseAdapter() {
             override fun mousePressed(e: MouseEvent) {
-                if (!SwingUtilities.isRightMouseButton(e)) return
-                pasteClipboard()
+                if (!mouseGrabbed) {
+                    if (SwingUtilities.isRightMouseButton(e)) {
+                        pasteClipboard()
+                        return
+                    }
+                    if (SwingUtilities.isLeftMouseButton(e)) {
+                        setMouseGrabbed(true)
+                        lastMouseX = e.x
+                        lastMouseY = e.y
+                    }
+                    return
+                }
+                host.sendMouseEvent(vmId, 0, 0, mouseButtonsFrom(e.modifiersEx))
+            }
+            override fun mouseReleased(e: MouseEvent) {
+                if (!mouseGrabbed) return
+                host.sendMouseEvent(vmId, 0, 0, mouseButtonsFrom(e.modifiersEx))
             }
         })
-        display.toolTipText = "Right-click to paste clipboard text"
+        display.addMouseMotionListener(object : MouseMotionAdapter() {
+            override fun mouseDragged(e: MouseEvent) = mouseMoved(e)
+            override fun mouseMoved(e: MouseEvent) {
+                if (!mouseGrabbed) return
+                val dx = e.x - lastMouseX
+                val dy = e.y - lastMouseY
+                lastMouseX = e.x
+                lastMouseY = e.y
+                if (dx == 0 && dy == 0) return
+                host.sendMouseEvent(vmId, dx, -dy, mouseButtonsFrom(e.modifiersEx))
+            }
+        })
+        display.toolTipText = "Click to grab mouse (Esc release); right-click pastes when ungrabbed"
         add(display, BorderLayout.CENTER)
         add(toolbar, BorderLayout.SOUTH)
         packToVideoAspect()
@@ -88,9 +130,33 @@ class VmConsoleWindow(
                 host.setConsoleFocused(vmId, true)
             }
             override fun windowDeactivated(e: WindowEvent?) {
+                if (mouseGrabbed) setMouseGrabbed(false)
                 host.setConsoleFocused(vmId, false)
             }
         })
+    }
+
+    private fun setMouseGrabbed(grabbed: Boolean) {
+        mouseGrabbed = grabbed
+        display.cursor = if (grabbed) blankCursor else Cursor.getDefaultCursor()
+        display.toolTipText = if (grabbed) {
+            "Mouse grabbed — Esc to release"
+        } else {
+            "Click to grab mouse (Esc release); right-click pastes when ungrabbed"
+        }
+        if (grabbed) display.requestFocusInWindow()
+    }
+
+    private val blankCursor: Cursor by lazy {
+        val img = BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB)
+        Toolkit.getDefaultToolkit().createCustomCursor(img, java.awt.Point(0, 0), "blank")
+    }
+
+    private fun mouseButtonsFrom(modifiersEx: Int): Int {
+        var b = 0
+        if ((modifiersEx and MouseEvent.BUTTON1_DOWN_MASK) != 0) b = b or 1
+        if ((modifiersEx and MouseEvent.BUTTON3_DOWN_MASK) != 0) b = b or 2
+        return b
     }
 
     private fun packToVideoAspect() {

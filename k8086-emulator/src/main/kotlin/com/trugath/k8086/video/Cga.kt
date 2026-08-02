@@ -17,8 +17,10 @@ import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.event.MouseMotionAdapter
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
+import java.awt.Cursor
 import java.awt.image.BufferedImage
 import java.io.File
 import javax.swing.JButton
@@ -111,6 +113,8 @@ internal class Cga(
     // Set by the machine to receive XT scan codes (make code, then break = make|0x80)
     // for host key presses on the display window.
     var onKeyScanCode: ((Int) -> Unit)? = null
+    /** Relative mouse when the CGA window has pointer grab (bit0=left, bit1=right). */
+    var onMouseEvent: ((dx: Int, dy: Int, buttons: Int) -> Unit)? = null
 
     override fun ioReadByte(port: Int): Int = when (port) {
         0x3DA, 0x3DE -> statusRegister()
@@ -448,6 +452,13 @@ internal class Cga(
                 p.addKeyListener(object : KeyAdapter() {
                     override fun keyPressed(e: KeyEvent) {
                         when (e.keyCode) {
+                            KeyEvent.VK_ESCAPE -> {
+                                if (mouseGrabbed) {
+                                    setMouseGrabbed(p, false)
+                                    suppressEscBreak = true
+                                    return
+                                }
+                            }
                             KeyEvent.VK_F12 -> {
                                 cycleCompositeMode()
                                 return
@@ -461,16 +472,48 @@ internal class Cga(
                     }
                     override fun keyReleased(e: KeyEvent) {
                         if (e.keyCode == KeyEvent.VK_F11 || e.keyCode == KeyEvent.VK_F12) return
+                        if (e.keyCode == KeyEvent.VK_ESCAPE && suppressEscBreak) {
+                            suppressEscBreak = false
+                            return
+                        }
                         scanCodeFor(e)?.let { onKeyScanCode?.invoke(it or 0x80) }
                     }
                 })
                 p.addMouseListener(object : MouseAdapter() {
                     override fun mousePressed(e: MouseEvent) {
-                        if (!SwingUtilities.isRightMouseButton(e)) return
-                        pasteClipboard(p)
+                        if (!mouseGrabbed) {
+                            if (SwingUtilities.isRightMouseButton(e)) {
+                                pasteClipboard(p)
+                                return
+                            }
+                            if (SwingUtilities.isLeftMouseButton(e)) {
+                                setMouseGrabbed(p, true)
+                                lastMouseX = e.x
+                                lastMouseY = e.y
+                            }
+                            return
+                        }
+                        emitMouse(0, 0, mouseButtonsFrom(e.modifiersEx))
+                    }
+                    override fun mouseReleased(e: MouseEvent) {
+                        if (!mouseGrabbed) return
+                        emitMouse(0, 0, mouseButtonsFrom(e.modifiersEx))
                     }
                 })
-                p.toolTipText = "Right-click to paste clipboard text"
+                p.addMouseMotionListener(object : MouseMotionAdapter() {
+                    override fun mouseDragged(e: MouseEvent) = mouseMoved(e)
+                    override fun mouseMoved(e: MouseEvent) {
+                        if (!mouseGrabbed) return
+                        val dx = e.x - lastMouseX
+                        val dy = e.y - lastMouseY
+                        lastMouseX = e.x
+                        lastMouseY = e.y
+                        if (dx == 0 && dy == 0) return
+                        // Swing Y grows down; Microsoft serial mouse Y grows up.
+                        emitMouse(dx, -dy, mouseButtonsFrom(e.modifiersEx))
+                    }
+                })
+                p.toolTipText = "Click to grab mouse (Esc release); right-click pastes when ungrabbed"
                 val toolbar = buildToolbar(p)
                 val root = JPanel(BorderLayout()).apply {
                     add(p, BorderLayout.CENTER)
@@ -516,6 +559,38 @@ internal class Cga(
                 updateWindowTitle()
             }
         }
+    }
+
+    private var mouseGrabbed = false
+    private var suppressEscBreak = false
+    private var lastMouseX = 0
+    private var lastMouseY = 0
+
+    private fun setMouseGrabbed(panel: JPanel, grabbed: Boolean) {
+        mouseGrabbed = grabbed
+        panel.cursor = if (grabbed) blankCursor else Cursor.getDefaultCursor()
+        panel.toolTipText = if (grabbed) {
+            "Mouse grabbed — Esc to release"
+        } else {
+            "Click to grab mouse (Esc release); right-click pastes when ungrabbed"
+        }
+        if (grabbed) panel.requestFocusInWindow()
+    }
+
+    private val blankCursor: Cursor by lazy {
+        val img = BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB)
+        Toolkit.getDefaultToolkit().createCustomCursor(img, java.awt.Point(0, 0), "blank")
+    }
+
+    private fun emitMouse(dx: Int, dy: Int, buttons: Int) {
+        onMouseEvent?.invoke(dx, dy, buttons)
+    }
+
+    private fun mouseButtonsFrom(modifiersEx: Int): Int {
+        var b = 0
+        if ((modifiersEx and MouseEvent.BUTTON1_DOWN_MASK) != 0) b = b or 1
+        if ((modifiersEx and MouseEvent.BUTTON3_DOWN_MASK) != 0) b = b or 2
+        return b
     }
 
     /** Initial size: video preferred size + toolbar height, not toolbar width. */

@@ -216,6 +216,10 @@ class LocalHost(
         runtimes[id]?.machine?.enqueueScanCode(code)
     }
 
+    override fun sendMouseEvent(id: VmId, dx: Int, dy: Int, buttons: Int) {
+        runtimes[id]?.machine?.enqueueMouseEvent(dx, dy, buttons)
+    }
+
     override fun sendCtrlAltDelete(id: VmId) {
         runtimes[id]?.machine?.sendCtrlAltDelete()
     }

@@ -133,8 +133,11 @@ module map.
 
 Opens only when the VM is starting, running, or paused. Focus the black display
 to send keyboard scan codes to the guest. Tab / Shift+Tab stay on the display
-(they are not used to move focus onto the toolbar). Right-click pastes clipboard
-text as guest keystrokes.
+(they are not used to move focus onto the toolbar). **Click** the display to grab
+the mouse (relative motion + buttons → COM1 Microsoft serial mouse at ~1200 7N1);
+**Esc** releases the grab. Right-click pastes clipboard text as guest keystrokes
+when the mouse is not grabbed. Run `BIN\MOUSE` once so guest apps see INT 33h
+(`MOUSE /U` unloads). COM1 is the wired port; do not expect a PS/2 or bus mouse.
 
 | Control | Role |
 |---------|------|

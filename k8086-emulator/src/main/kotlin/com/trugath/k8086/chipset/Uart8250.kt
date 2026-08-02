@@ -6,7 +6,7 @@ import com.trugath.k8086.api.IoDevice
  * Minimal NS8250 UART for COM1 (0x3F8–0x3FF) on IRQ4.
  *
  * Instant baud (THR empties immediately). Supports divisor latch, loopback,
- * and host RX injection for tests / future serial mice.
+ * and host RX injection (serial mouse packets, tests) via a small RX FIFO.
  */
 class Uart8250(
     private val pic: Pic8259,
@@ -24,14 +24,23 @@ class Uart8250(
     private var msr = MSR_CTS or MSR_DSR or MSR_DCD
     private var scratch = 0
     private var divisor = 1
+    /** Bytes waiting behind [rbr] (present when [LSR_DR] is set). */
+    private val rxFifo = ArrayDeque<Int>()
 
     /** Invoked for each host-visible TX byte (THR write, not loopback-only). */
     var onTransmit: ((Int) -> Unit)? = null
 
     fun enqueueRx(value: Int) {
         if ((mcr and MCR_LOOP) != 0) return
-        rbr = value and 0xFF
-        lsr = lsr or LSR_DR
+        val v = value and 0xFF
+        if ((lsr and LSR_DR) == 0) {
+            rbr = v
+            lsr = lsr or LSR_DR
+        } else if (rxFifo.size < RX_FIFO_CAP) {
+            rxFifo.addLast(v)
+        } else {
+            lsr = lsr or LSR_OE
+        }
         updateInterrupts()
     }
 
@@ -42,7 +51,12 @@ class Uart8250(
                 if ((lcr and LCR_DLAB) != 0) divisor and 0xFF
                 else {
                     val v = rbr
-                    lsr = lsr and LSR_DR.inv()
+                    if (rxFifo.isNotEmpty()) {
+                        rbr = rxFifo.removeFirst()
+                        // Keep DR set; next byte already in RBR.
+                    } else {
+                        lsr = lsr and LSR_DR.inv()
+                    }
                     updateInterrupts()
                     v and 0xFF
                 }
@@ -83,8 +97,7 @@ class Uart8250(
                     thr = v
                     lsr = lsr or LSR_THRE or LSR_TEMT
                     if ((mcr and MCR_LOOP) != 0) {
-                        rbr = v
-                        lsr = lsr or LSR_DR
+                        enqueueRxFromLoopback(v)
                     } else {
                         onTransmit?.invoke(v)
                     }
@@ -138,8 +151,23 @@ class Uart8250(
     fun divisorLatch(): Int = divisor and 0xFFFF
     fun lineStatus(): Int = lsr and 0xFF
     fun interruptId(): Int = iir and 0xFF
+    fun rxFifoSize(): Int = rxFifo.size + if ((lsr and LSR_DR) != 0) 1 else 0
+
+    private fun enqueueRxFromLoopback(value: Int) {
+        val v = value and 0xFF
+        if ((lsr and LSR_DR) == 0) {
+            rbr = v
+            lsr = lsr or LSR_DR
+        } else if (rxFifo.size < RX_FIFO_CAP) {
+            rxFifo.addLast(v)
+        } else {
+            lsr = lsr or LSR_OE
+        }
+    }
 
     companion object {
+        const val RX_FIFO_CAP = 64
+
         const val IER_RDA = 0x01
         const val IER_THRE = 0x02
         const val IER_RLS = 0x04

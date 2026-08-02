@@ -99,6 +99,7 @@ class LocalHostCoverageTest {
         Thread.sleep(150)
 
         host!!.sendScanCode(id, 0x1E)
+        host!!.sendMouseEvent(id, 1, -1, 1)
         host!!.sendCtrlAltDelete(id)
         host!!.setConsoleFocused(id, true)
         host!!.setConsoleFocused(id, false)
