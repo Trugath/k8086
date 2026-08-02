@@ -79,6 +79,15 @@ to open the full settings dialog (name, ROMs, hardware, cards).
 - Full UI reference: [User manual](manual.md)
 - Architecture / modules: [architecture.md](architecture.md)
 - Optional CPU conformance corpora and CLI flags: [README](../README.md)
+- ISA cards (1MB memory expansion, SixPak-style RTC/serial/LPT/gameport): [cards/README.md](../cards/README.md)
+
+### Recipe: 5155-like 256K + 1MB mem + SixPak I/O
+
+In the New-VM wizard: set motherboard memory to **256 KB**, keep COM1/CGA/floppy,
+then on **Expansion** add JARs from `cards/*/build/libs/` after
+`./gradlew :cards:mem-expansion:jar :cards:uart-8250:jar :cards:rtc-mm58167:jar :cards:lpt:jar :cards:gameport:jar`.
+Defaults fill conventional RAM to 640K, map UMB at `D0000`, and add COM2/RTC/LPT2/gameport.
+See [cards/README.md](../cards/README.md) for CLI `--card` equivalents.
 
 To refresh these screenshots after UI changes:
 

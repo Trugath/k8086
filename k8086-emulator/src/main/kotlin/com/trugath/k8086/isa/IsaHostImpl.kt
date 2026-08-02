@@ -34,6 +34,23 @@ class IsaHostImpl(
         machine.cpu.memoryBus.map(region, cardId)
     }
 
+    override fun extendConventionalMemory(endExclusive: Int) {
+        require(endExclusive and 0xF == 0) {
+            "conventional memory end 0x${endExclusive.toString(16)} must be paragraph-aligned"
+        }
+        require(endExclusive in 64 * 1024..0xA0000) {
+            "conventional memory end must be 64K..A0000h (got 0x${endExclusive.toString(16)})"
+        }
+        val current = machine.cpu.conventionalMemoryEnd
+        require(endExclusive >= current) {
+            "extendConventionalMemory cannot shrink (current=0x${current.toString(16)}, " +
+                "requested=0x${endExclusive.toString(16)})"
+        }
+        machine.cpu.setConventionalMemoryEnd(endExclusive)
+    }
+
+    override fun conventionalMemoryEnd(): Int = machine.cpu.conventionalMemoryEnd
+
     override fun mapOptionRom(bytes: ByteArray, base: Int) {
         require(base and 0x7FF == 0) {
             "Option ROM base 0x${base.toString(16)} must be 2K-aligned"

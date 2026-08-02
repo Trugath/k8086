@@ -23,6 +23,11 @@ dependencies {
     testImplementation(project(":cards:heartbeat"))
     testImplementation(project(":cards:ems-window"))
     testImplementation(project(":cards:de220"))
+    testImplementation(project(":cards:mem-expansion"))
+    testImplementation(project(":cards:uart-8250"))
+    testImplementation(project(":cards:rtc-mm58167"))
+    testImplementation(project(":cards:lpt"))
+    testImplementation(project(":cards:gameport"))
 }
 
 tasks.test {
@@ -107,6 +112,11 @@ tasks.jacocoTestReport {
         ":cards:heartbeat",
         ":cards:ems-window",
         ":cards:de220",
+        ":cards:mem-expansion",
+        ":cards:uart-8250",
+        ":cards:rtc-mm58167",
+        ":cards:lpt",
+        ":cards:gameport",
     )
     classDirectories.setFrom(
         files(

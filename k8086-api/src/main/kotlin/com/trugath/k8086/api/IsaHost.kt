@@ -34,6 +34,20 @@ interface IsaHost {
 
     fun mapMemory(region: MemoryRegion)
 
+    /**
+     * Raise the exclusive end of installed conventional RAM (below A0000h).
+     *
+     * Used by memory-expansion cards that fill the hole above motherboard RAM
+     * so POST’s sizing loop and INT 12h see the new size. [endExclusive] must be
+     * paragraph-aligned, ≥ the current end, and ≤ 0xA0000.
+     *
+     * Default no-op for older host implementations / stubs.
+     */
+    fun extendConventionalMemory(endExclusive: Int) {}
+
+    /** Exclusive end of installed conventional RAM (below A0000h). Default 640K. */
+    fun conventionalMemoryEnd(): Int = 0xA0000
+
     /** Map an option ROM. [base] must be 2K-aligned; bytes must start with 55 AA. */
     fun mapOptionRom(bytes: ByteArray, base: Int)
 

@@ -65,4 +65,41 @@ class IsaHostImplCoverageTest {
             host.mapOptionRom(rom, 0xC8001)
         }
     }
+
+    @Test
+    fun extendConventionalMemoryRaisesEndAndEnablesAccess() {
+        TestAssets.assumeRomsPresent()
+        val machine = Machine(
+            TestAssets.u18.absolutePath,
+            TestAssets.u19.absolutePath,
+            MachineOptions(
+                showVideo = false,
+                enableAudio = false,
+                exitOnClose = false,
+                realtime = false,
+                motherboard = com.trugath.k8086.config.MotherboardConfig(baseMemoryKb = 256),
+            ),
+        )
+        val host = IsaHostImpl(machine, "mem-exp")
+        assertEquals(256 * 1024, host.conventionalMemoryEnd())
+
+        // Hole floats as 0xFF until extended.
+        assertEquals(0xFF, host.cpuRead8(0x40000))
+        host.cpuWrite8(0x40000, 0x5A)
+        assertEquals(0xFF, host.cpuRead8(0x40000))
+
+        host.extendConventionalMemory(0xA0000)
+        assertEquals(0xA0000, host.conventionalMemoryEnd())
+        host.cpuWrite8(0x40000, 0x5A)
+        assertEquals(0x5A, host.cpuRead8(0x40000))
+        host.cpuWrite8(0x9FFFE, 0xA5)
+        assertEquals(0xA5, host.cpuRead8(0x9FFFE))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            host.extendConventionalMemory(0x80000) // cannot shrink
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            host.extendConventionalMemory(0xA0001) // not paragraph-aligned / over A0000
+        }
+    }
 }

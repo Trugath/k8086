@@ -91,6 +91,7 @@ object MotherboardResources {
         enableCom1: Boolean = true,
         floppy: FloppyControllerConfig = FloppyControllerConfig(),
         hardDisk: HardDiskControllerConfig = HardDiskControllerConfig(),
+        motherboard: MotherboardConfig = MotherboardConfig(),
     ): List<ResourceClaim> = buildList {
         add(ResourceClaim(ResourceKind.IO_PORT, 0x00, 0x0F, "motherboard-dma"))
         add(ResourceClaim(ResourceKind.IO_PORT, 0x80, 0x8F, "motherboard-dma"))
@@ -106,6 +107,8 @@ object MotherboardResources {
 
         if (graphics == GraphicsAdapter.CGA) {
             add(ResourceClaim(ResourceKind.IO_PORT, 0x3D0, 0x3DF, "cga-adapter"))
+            // CGA regen buffer — expansion UMB must not claim this by default.
+            add(ResourceClaim(ResourceKind.MEMORY, 0xB8000, 0xBFFFF, "cga-adapter"))
         }
         if (floppy.enabled) {
             add(ResourceClaim(ResourceKind.IO_PORT, 0x3F0, 0x3F7, "floppy-controller"))
@@ -116,8 +119,18 @@ object MotherboardResources {
             add(ResourceClaim(ResourceKind.IO_PORT, 0x3F8, 0x3FF, "com1-uart"))
             add(ResourceClaim(ResourceKind.IRQ, 4, 4, "com1-uart"))
         }
+        // Machine always maps LPT1 Centronics at 0x378.
+        add(ResourceClaim(ResourceKind.IO_PORT, 0x378, 0x37A, "lpt1-parallel"))
         addAll(hardDisk.resourceClaims())
 
+        val convEnd = motherboard.conventionalMemoryEnd()
+        if (convEnd > 0) {
+            add(ResourceClaim(ResourceKind.MEMORY, 0, convEnd - 1, "motherboard-ram"))
+        }
+        // Default Fixed Disk option ROM window (when HD enabled without custom path).
+        if (hardDisk.enabled) {
+            add(ResourceClaim(ResourceKind.MEMORY, 0xC8000, 0xC87FF, "fdrom"))
+        }
         add(ResourceClaim(ResourceKind.MEMORY, 0xF6000, 0xFFFFF, "motherboard-bios"))
     }
 
@@ -339,6 +352,7 @@ object ConfigValidator {
             enableCom1 = setup.enableCom1,
             floppy = setup.floppy,
             hardDisk = setup.hardDisk,
+            motherboard = setup.motherboard,
         )
 
         val enabledCards = setup.cards.filter { it.enabled }
