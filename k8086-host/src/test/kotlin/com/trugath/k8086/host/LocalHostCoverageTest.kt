@@ -66,6 +66,7 @@ class LocalHostCoverageTest {
         host = LocalHost(VmStore(temp))
         assertNull(host!!.metrics(VmId("nope")))
         assertNull(host!!.pollConsoleFrame(VmId("nope")))
+        assertTrue(host!!.pollPrintJobs(VmId("nope")).isEmpty())
     }
 
     @Test

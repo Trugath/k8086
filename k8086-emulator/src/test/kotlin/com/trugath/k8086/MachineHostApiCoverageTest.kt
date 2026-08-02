@@ -27,6 +27,7 @@ class MachineHostApiCoverageTest {
         assertFalse(opts.showVideo)
         assertEquals(true, opts.enableAudio)
         assertFalse(opts.exitOnClose)
+        assertFalse(opts.resolvedShowPrintPreview())
         assertTrue(opts.resolvedEnableAudio())
         assertTrue(opts.realtime)
     }

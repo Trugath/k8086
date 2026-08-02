@@ -69,6 +69,16 @@ class CliArgsCoverageTest {
     }
 
     @Test
+    fun parseArgsSupportsParallelLog() {
+        val spaced = parseArgs(
+            arrayOf(TestAssets.FLOPPY_PATH, "--parallel-log", "/tmp/lpt1.log", "--quiet"),
+        )
+        assertEquals("/tmp/lpt1.log", spaced.parallelLog)
+        val eq = parseArgs(arrayOf("--parallel-log=/tmp/b.log", "--floppy", TestAssets.FLOPPY_PATH))
+        assertEquals("/tmp/b.log", eq.parallelLog)
+    }
+
+    @Test
     fun parseArgsSupportsCgaExpectAndMaxInstructions() {
         val cli = parseArgs(
             arrayOf(

@@ -59,12 +59,13 @@ fun main(args: Array<String>) {
 
 private fun printUsage() {
     println("Usage: k8086 [floppy.img] [[@]harddisk.img] [--floppy path]... [--card path.jar[,k=v...]]...")
-    println("         [--headless] [--serial-log path] [--quiet]")
+    println("         [--headless] [--serial-log path] [--parallel-log path] [--quiet]")
     println("         [--cga-expect text] [--max-instructions N]")
     println("  Floppy drives optional (0–4). Repeat --floppy for B:/C:/D:.")
     println("  Hard disk optional; @prefix boots from it (enables HD controller).")
     println("  --headless       No CGA window; full-speed (realtime pacing off).")
     println("  --serial-log P   Append COM1 TX bytes to file P.")
+    println("  --parallel-log P Append LPT1 captured bytes to file P.")
     println("  --cga-expect T   Stop successfully when CGA text contains T.")
     println("  --max-instructions N  Stop after N instructions (default: unlimited).")
     println("  --turbo          Free-run CPU (ignore realtime pacing); useful for fast boots.")
@@ -103,6 +104,7 @@ private fun runCli(u18: String, u19: String, parsed: CliArgs): Int {
         exitOnClose = !parsed.headless,
         realtime = !parsed.headless,
         serialLogPath = parsed.serialLog,
+        parallelLogPath = parsed.parallelLog,
         floppy = FloppyControllerConfig(
             enabled = true,
             driveImages = parsed.floppies,
@@ -162,6 +164,7 @@ internal data class CliArgs(
     val cards: List<CardSpec> = emptyList(),
     val headless: Boolean = false,
     val serialLog: String? = null,
+    val parallelLog: String? = null,
     val quiet: Boolean = false,
     val cgaExpect: String? = null,
     val maxInstructions: Long = Long.MAX_VALUE,
@@ -178,6 +181,7 @@ internal fun parseArgs(args: Array<String>): CliArgs {
     val cards = mutableListOf<CardSpec>()
     var headless = false
     var serialLog: String? = null
+    var parallelLog: String? = null
     var quiet = false
     var cgaExpect: String? = null
     var maxInstructions = Long.MAX_VALUE
@@ -227,6 +231,16 @@ internal fun parseArgs(args: Array<String>): CliArgs {
             }
             a.startsWith("--serial-log=") -> {
                 serialLog = a.removePrefix("--serial-log=")
+                i += 1
+            }
+            a == "--parallel-log" -> {
+                val path = args.getOrNull(i + 1)
+                    ?: throw IllegalArgumentException("--parallel-log requires a path")
+                parallelLog = path
+                i += 2
+            }
+            a.startsWith("--parallel-log=") -> {
+                parallelLog = a.removePrefix("--parallel-log=")
                 i += 1
             }
             a == "--cga-expect" -> {
@@ -312,7 +326,7 @@ internal fun parseArgs(args: Array<String>): CliArgs {
     }
     require(floppies.size <= 4) { "At most 4 floppy drives" }
     return CliArgs(
-        floppies, hardDisk, cards, headless, serialLog, quiet,
+        floppies, hardDisk, cards, headless, serialLog, parallelLog, quiet,
         cgaExpect, maxInstructions, turbo, floppyInt13Shim, hdInt13Bios,
     )
 }

@@ -10,12 +10,14 @@ import com.trugath.k8086.protocol.CpuDebugState
 import com.trugath.k8086.protocol.HostApi
 import com.trugath.k8086.protocol.MemoryDump
 import com.trugath.k8086.protocol.NetworkApi
+import com.trugath.k8086.protocol.PrintJob
 import com.trugath.k8086.protocol.VmDefinition
 import com.trugath.k8086.protocol.VmId
 import com.trugath.k8086.protocol.VmMetrics
 import com.trugath.k8086.protocol.VmState
 import com.trugath.k8086.protocol.VmSummary
 import java.io.File
+import java.nio.charset.Charset
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -182,6 +184,18 @@ class LocalHost(
         return ConsoleFrame(snap.width, snap.height, snap.argb)
     }
 
+    override fun pollPrintJobs(id: VmId): List<PrintJob> {
+        val machine = runtimes[id]?.machine ?: return emptyList()
+        return machine.drainCompletedPrintJobs().map { job ->
+            PrintJob(
+                vmId = id,
+                text = String(job.bytes, CP437),
+                rawBytes = job.bytes,
+                capturedAtMs = job.capturedAtMs,
+            )
+        }
+    }
+
     override fun sendScanCode(id: VmId, code: Int) {
         runtimes[id]?.machine?.enqueueScanCode(code)
     }
@@ -326,5 +340,9 @@ class LocalHost(
         @Volatile var machine: Machine? = null
         @Volatile var future: Future<*>? = null
         @Volatile var errorMessage: String? = null
+    }
+
+    companion object {
+        private val CP437: Charset = Charset.forName("IBM437")
     }
 }

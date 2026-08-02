@@ -17,6 +17,8 @@ import com.trugath.k8086.chipset.Ppi8255
 import com.trugath.k8086.chipset.ShutdownPort
 import com.trugath.k8086.chipset.ScanCodeInjectPort
 import com.trugath.k8086.chipset.DiskChangeInjectPort
+import com.trugath.k8086.chipset.CapturedPrintJob
+import com.trugath.k8086.chipset.ParallelPort
 import com.trugath.k8086.chipset.Uart8250
 import com.trugath.k8086.config.FloppyControllerConfig
 import com.trugath.k8086.config.GraphicsAdapter
@@ -53,6 +55,7 @@ import com.trugath.k8086.storage.FloppyInt13
 import com.trugath.k8086.storage.HdGeometry
 import com.trugath.k8086.storage.HdInt13
 import com.trugath.k8086.storage.Wd1003
+import com.trugath.k8086.ui.PrintPreviewWindow
 import com.trugath.k8086.video.Cga
 import com.trugath.k8086.video.FramebufferSnapshot
 import java.io.BufferedOutputStream
@@ -62,6 +65,7 @@ import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import javax.swing.SwingUtilities
 
 /** Why [Machine.run] returned. */
 enum class RunStopReason {
@@ -93,6 +97,13 @@ data class MachineOptions(
     val enableCom1: Boolean = true,
     /** When set, COM1 TX bytes are appended to this file. */
     val serialLogPath: String? = null,
+    /** When set, LPT1 captured bytes are appended to this file. */
+    val parallelLogPath: String? = null,
+    /**
+     * Open a Swing print-preview window when an LPT1 job completes.
+     * Defaults to [showVideo] (CLI with display); workstation VMs poll via HostApi instead.
+     */
+    val showPrintPreview: Boolean? = null,
     val floppy: FloppyControllerConfig = FloppyControllerConfig(enabled = true),
     val hardDisk: HardDiskControllerConfig = HardDiskControllerConfig(enabled = false),
     /**
@@ -110,6 +121,8 @@ data class MachineOptions(
     fun resolvedEnableAudio(): Boolean =
         enableAudio ?: (showVideo && graphics == GraphicsAdapter.CGA)
 
+    fun resolvedShowPrintPreview(): Boolean = showPrintPreview ?: showVideo
+
     companion object {
         fun fromSetup(setup: MachineSetup) = MachineOptions(
             motherboard = setup.motherboard,
@@ -126,6 +139,7 @@ data class MachineOptions(
             enableAudio = true,
             exitOnClose = false,
             realtime = true,
+            showPrintPreview = false,
         )
     }
 }
@@ -176,9 +190,12 @@ class Machine(
     val keyboard = Keyboard(pic, ppi)
     val speaker = PcSpeaker(pit, ppi, enableAudio = options.resolvedEnableAudio())
     val uart: Uart8250? = if (options.enableCom1) Uart8250(pic) else null
+    val parallel = ParallelPort()
     val shutdownPort = ShutdownPort { requestShutdownFromPort() }
 
     private var serialLogStream: OutputStream? = null
+    private var parallelLogStream: OutputStream? = null
+    private var printPreviewSeq = 0
 
     @Volatile
     private var stopReason: RunStopReason = RunStopReason.NONE
@@ -377,6 +394,25 @@ class Machine(
             }
         }
 
+        ioBus.map(parallel, (0x378..0x37A).toList(), owner = "lpt1-parallel")
+        options.parallelLogPath?.let { path ->
+            val stream = BufferedOutputStream(FileOutputStream(path, false))
+            parallelLogStream = stream
+            parallel.onByte = { byte ->
+                synchronized(stream) {
+                    stream.write(byte)
+                    stream.flush()
+                }
+            }
+        }
+        if (options.resolvedShowPrintPreview()) {
+            parallel.onJobCompleted = { job ->
+                // Drain path also queues; open UI without double-consuming HostApi jobs.
+                openPrintPreview(job)
+            }
+        }
+        addTickable { _ -> parallel.pollIdle() }
+
         ioBus.map(shutdownPort, listOf(ShutdownPort.PORT), owner = "shutdown-port")
         ioBus.map(
             ScanCodeInjectPort { code -> keyboard.enqueueScanCode(code) },
@@ -467,6 +503,9 @@ class Machine(
     }
 
     fun copyFramebuffer(): FramebufferSnapshot? = cga?.copyFramebuffer()
+
+    /** Drain completed LPT1 print jobs (idle-flushes pending buffer first). */
+    fun drainCompletedPrintJobs(): List<CapturedPrintJob> = parallel.drainCompletedJobs()
 
     fun enqueueScanCode(code: Int) = keyboard.enqueueScanCode(code)
 
@@ -873,7 +912,27 @@ class Machine(
             serialLogStream = null
             uart?.onTransmit = null
         }
+        parallel.onJobCompleted = null
+        parallel.onByte = null
+        parallel.flushPending()
+        parallelLogStream?.let { stream ->
+            try {
+                synchronized(stream) { stream.close() }
+            } catch (_: Exception) {
+            }
+            parallelLogStream = null
+        }
         synchronized(this) { claimedDiskPaths.clear() }
+    }
+
+    private fun openPrintPreview(job: CapturedPrintJob) {
+        val seq = ++printPreviewSeq
+        val title = "Print Preview — LPT1 (#$seq)"
+        val text = PrintPreviewWindow.decodeCp437(job.bytes)
+        val raw = job.bytes.copyOf()
+        SwingUtilities.invokeLater {
+            PrintPreviewWindow(title, text, raw).isVisible = true
+        }
     }
 
     fun run(maxInstructions: Long = Long.MAX_VALUE) {

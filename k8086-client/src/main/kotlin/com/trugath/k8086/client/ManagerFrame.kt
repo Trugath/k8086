@@ -6,6 +6,7 @@ import com.trugath.k8086.protocol.SystemRomDefaults
 import com.trugath.k8086.protocol.VmId
 import com.trugath.k8086.protocol.VmState
 import com.trugath.k8086.protocol.VmSummary
+import com.trugath.k8086.ui.PrintPreviewWindow
 import com.trugath.k8086.ui.StartWizard
 import java.awt.BorderLayout
 import java.awt.Dimension
@@ -70,8 +71,10 @@ class ManagerFrame(
     }
     private val openConsoles = mutableMapOf<VmId, VmConsoleWindow>()
     private val openDebugWindows = mutableMapOf<VmId, VmDebugWindow>()
+    private val printPreviewSeq = mutableMapOf<VmId, Int>()
 
     private val refreshTimer = Timer(500) { refreshList(preserveSelection = true) }
+    private val printPollTimer = Timer(400) { pollPrintJobs() }
 
     init {
         defaultCloseOperation = WindowConstants.EXIT_ON_CLOSE
@@ -120,6 +123,20 @@ class ManagerFrame(
         setLocationRelativeTo(null)
         refreshList()
         refreshTimer.start()
+        printPollTimer.start()
+    }
+
+    private fun pollPrintJobs() {
+        for (summary in host.listVms()) {
+            if (summary.state != VmState.Running && summary.state != VmState.Paused) continue
+            val jobs = host.pollPrintJobs(summary.id)
+            for (job in jobs) {
+                val seq = (printPreviewSeq[summary.id] ?: 0) + 1
+                printPreviewSeq[summary.id] = seq
+                val title = "${summary.name} — Print Preview (#$seq)"
+                PrintPreviewWindow(title, job.text, job.rawBytes).isVisible = true
+            }
+        }
     }
 
     private fun selected(): VmSummary? = vmList.selectedValue

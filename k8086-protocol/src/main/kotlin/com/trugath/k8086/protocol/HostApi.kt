@@ -170,6 +170,34 @@ data class MemoryDump(
 )
 
 /**
+ * Completed LPT1 capture ready for a host preview / system print.
+ * [text] is CP437-decoded for display; [rawBytes] preserves guest output for Save.
+ */
+data class PrintJob(
+    val vmId: VmId,
+    val text: String,
+    val rawBytes: ByteArray,
+    val capturedAtMs: Long,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is PrintJob) return false
+        return vmId == other.vmId &&
+            text == other.text &&
+            capturedAtMs == other.capturedAtMs &&
+            rawBytes.contentEquals(other.rawBytes)
+    }
+
+    override fun hashCode(): Int {
+        var result = vmId.hashCode()
+        result = 31 * result + text.hashCode()
+        result = 31 * result + rawBytes.contentHashCode()
+        result = 31 * result + capturedAtMs.hashCode()
+        return result
+    }
+}
+
+/**
  * Host control plane. Milestone-1 implementations are in-process; DTOs are JSON-ready
  * for a future WebSocket transport.
  */
@@ -186,6 +214,8 @@ interface HostApi {
     fun metrics(id: VmId): VmMetrics?
 
     fun pollConsoleFrame(id: VmId): ConsoleFrame?
+    /** Drain completed LPT1 print jobs for [id] (may be empty). */
+    fun pollPrintJobs(id: VmId): List<PrintJob>
     fun sendScanCode(id: VmId, code: Int)
     fun sendCtrlAltDelete(id: VmId)
     fun changeFloppy(id: VmId, drive: Int, path: String?)
