@@ -60,6 +60,22 @@ distributions {
                 include("fd.img")
                 into("disks")
             }
+            // Unix launchers must be executable inside the zip (ZIP stores mode bits).
+            filesMatching(listOf("run.sh", "run-cli.sh", "bin/k8086")) {
+                permissions {
+                    unix("rwxr-xr-x")
+                }
+            }
+        }
+    }
+}
+
+tasks.named<Zip>("distZip") {
+    eachFile {
+        if (name == "run.sh" || name == "run-cli.sh" || relativePath.pathString == "bin/k8086") {
+            permissions {
+                unix("rwxr-xr-x")
+            }
         }
     }
 }

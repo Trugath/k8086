@@ -6,17 +6,22 @@ IBM 5155 / 5160-class PC emulator (multi-VM manager + CGA console).
 Requirements
 ------------
 - JDK 21 or newer (java on PATH, or JAVA_HOME set)
-- A display (Swing manager / console windows)
+- A display for the workstation UI (Swing manager / console windows)
 
-Run
----
+Run (workstation UI)
+--------------------
 Windows:  double-click run.bat  (or:  run.bat)
-Linux / macOS:  chmod +x run.sh && ./run.sh
+Linux / macOS:  ./run.sh
+
+Run (CLI / headless)
+--------------------
+Windows:  run-cli.bat disks\fd.img --headless --quiet --cga-expect A:>
+Linux / macOS:  ./run-cli.sh disks/fd.img --headless --quiet --cga-expect 'A:>'
 
 Included assets
 ---------------
-roms/u18.bin, roms/u19.bin  — default rmDOS system ROMs
-disks/fd.img                — rmDOS boot floppy (use in the New VM wizard)
+roms/u18.bin, roms/u19.bin, roms/fdrom.bin  — default rmDOS system ROMs
+disks/fd.img                                — rmDOS boot floppy
 
 VM definitions are stored under ~/.k8086/vms/
 

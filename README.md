@@ -23,11 +23,13 @@ Prebuilt workstation zips are attached to
 
 1. Install JDK 21+
 2. Download `k8086-*.zip`, unzip
-3. Run **`run.bat`** (Windows) or **`./run.sh`** (Linux / macOS)
+3. Run **`run.bat`** / **`./run.sh`** (workstation UI), or **`run-cli.bat`** /
+   **`./run-cli.sh`** for the single-instance CLI (supports `--headless`)
 
 The zip includes jars, default rmDOS ROMs (`roms/`), and boot floppy
-(`disks/fd.img`). To publish a release from this repo, push a tag such as
-`v1.0.0` (CI builds the zip and attaches it to the release).
+(`disks/fd.img`). Unix scripts are executable in the zip. To publish a release,
+push a tag such as `v0.8.0` (CI builds the zip, smokes a headless boot, and
+attaches it to the release).
 
 ## Clone
 

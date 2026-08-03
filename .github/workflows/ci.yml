@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Unit tests
+        run: ./gradlew test
+
+      - name: Build distribution zip
+        run: ./gradlew :k8086-app:distZip -PreleaseVersion=ci
+
+      - name: Unzip smoke (assets + headless boot to A:>)
+        run: |
+          set -euo pipefail
+          ZIP="$(ls -1 k8086-app/build/distributions/k8086-ci.zip)"
+          rm -rf /tmp/k8086-ci-dist
+          unzip -q "$ZIP" -d /tmp/k8086-ci-dist
+          ROOT=/tmp/k8086-ci-dist/k8086-ci
+          test -x "$ROOT/run.sh"
+          test -x "$ROOT/run-cli.sh"
+          test -x "$ROOT/bin/k8086"
+          test -f "$ROOT/roms/u18.bin"
+          test -f "$ROOT/roms/u19.bin"
+          test -f "$ROOT/roms/fdrom.bin"
+          test -f "$ROOT/disks/fd.img"
+          SERIAL=/tmp/k8086-ci-serial.log
+          : >"$SERIAL"
+          "$ROOT/run-cli.sh" disks/fd.img --headless --quiet \
+            --serial-log "$SERIAL" --cga-expect 'A:>' --no-floppy-int13-shim
+          grep -q 'A:>' "$SERIAL"
+          grep -q 'rmDOS' "$SERIAL"
