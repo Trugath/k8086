@@ -1,11 +1,17 @@
 # k8086
 
+[![CI](https://github.com/Trugath/k8086/actions/workflows/ci.yml/badge.svg)](https://github.com/Trugath/k8086/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/Trugath/k8086)](https://github.com/Trugath/k8086/releases)
+
 IBM 5155 / 5160-class PC emulator in Kotlin. Boots XT-compatible system ROMs
 (default: rmDOS U18/U19), emulates XT motherboard peripherals, and runs rmDOS
 and classic DOS software from disk images.
 
 Multi-module workstation: reusable emulator, in-process multi-VM host, and a
 VirtualBox-style manager UI.
+
+![k8086 workstation manager](docs/screenshots/01-manager.png)
 
 **License:** [MIT](LICENSE) — see [NOTICE](NOTICE) for third-party attribution
 (bundled rmDOS assets, CGA font, optional SingleStepTests, etc.).
