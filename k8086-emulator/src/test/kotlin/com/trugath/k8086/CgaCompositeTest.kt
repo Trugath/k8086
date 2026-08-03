@@ -93,6 +93,24 @@ class CgaCompositeTest {
     }
 
     @Test
+    fun setCompositeEnabledForcesOnAndOff() {
+        val cpu = Emulator8086()
+        val cga = Cga(cpu, showWindow = false)
+        cga.ioWriteByte(0x3D8, 0x0A) // mode 4 graphics
+        assertEquals(CgaComposite.Mode.AUTO, cga.compositeMode)
+        assertFalse(cga.isCompositeActive())
+
+        cga.setCompositeEnabled(true)
+        assertEquals(CgaComposite.Mode.ON, cga.compositeMode)
+        assertTrue(cga.isCompositeActive())
+        assertTrue(cga.isGraphicsMode())
+
+        cga.setCompositeEnabled(false)
+        assertEquals(CgaComposite.Mode.OFF, cga.compositeMode)
+        assertFalse(cga.isCompositeActive())
+    }
+
+    @Test
     fun cycleCompositeModeVisitsAllStates() {
         val cpu = Emulator8086()
         val cga = Cga(cpu, showWindow = false)

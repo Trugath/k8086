@@ -5,6 +5,7 @@ import com.trugath.k8086.MachineOptions
 import com.trugath.k8086.isa.CardSpec
 import com.trugath.k8086.net.NetworkRegistry
 import com.trugath.k8086.net.NetworkStore
+import com.trugath.k8086.protocol.CompositeKind
 import com.trugath.k8086.protocol.ConsoleFrame
 import com.trugath.k8086.protocol.CpuDebugState
 import com.trugath.k8086.protocol.HostApi
@@ -16,6 +17,7 @@ import com.trugath.k8086.protocol.VmId
 import com.trugath.k8086.protocol.VmMetrics
 import com.trugath.k8086.protocol.VmState
 import com.trugath.k8086.protocol.VmSummary
+import com.trugath.k8086.video.CgaComposite
 import java.io.File
 import java.nio.charset.Charset
 import java.util.concurrent.ConcurrentHashMap
@@ -197,8 +199,27 @@ class LocalHost(
 
     override fun pollConsoleFrame(id: VmId): ConsoleFrame? {
         val snap = runtimes[id]?.machine?.copyFramebuffer() ?: return null
-        return ConsoleFrame(snap.width, snap.height, snap.argb)
+        val kind = when (snap.compositeMode) {
+            CgaComposite.Mode.AUTO -> CompositeKind.AUTO
+            CgaComposite.Mode.ON -> CompositeKind.ON
+            CgaComposite.Mode.OFF -> CompositeKind.OFF
+        }
+        return ConsoleFrame(
+            width = snap.width,
+            height = snap.height,
+            argb = snap.argb,
+            graphicsMode = snap.graphicsMode,
+            compositeMode = kind,
+            compositeActive = snap.compositeActive,
+        )
     }
+
+    override fun setCompositeEnabled(id: VmId, enabled: Boolean) {
+        runtimes[id]?.machine?.setCompositeEnabled(enabled)
+    }
+
+    override fun isCompositeActive(id: VmId): Boolean =
+        runtimes[id]?.machine?.isCompositeActive() == true
 
     override fun pollPrintJobs(id: VmId): List<PrintJob> {
         val machine = runtimes[id]?.machine ?: return emptyList()

@@ -19,6 +19,21 @@ class ProtocolDtoTest {
     }
 
     @Test
+    fun consoleFrameIncludesCompositeMetadata() {
+        val frame = ConsoleFrame(
+            width = 320,
+            height = 200,
+            argb = IntArray(320 * 200),
+            graphicsMode = true,
+            compositeMode = CompositeKind.ON,
+            compositeActive = true,
+        )
+        assertTrue(frame.graphicsMode)
+        assertEquals(CompositeKind.ON, frame.compositeMode)
+        assertTrue(frame.compositeActive)
+    }
+
+    @Test
     fun vmIdToStringIsValue() {
         val id = VmId("abc-123")
         assertEquals("abc-123", id.toString())

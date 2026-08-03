@@ -109,6 +109,8 @@ internal class Cga(
     private var image: BufferedImage? = null
     /** Steady EDT paint so live-resize cannot starve frame updates. */
     private var refreshTimer: Timer? = null
+    /** Composite colour-mix toggle; visible only in APA graphics modes. */
+    private var compositeButton: JButton? = null
 
     // Set by the machine to receive XT scan codes (make code, then break = make|0x80)
     // for host key presses on the display window.
@@ -146,6 +148,7 @@ internal class Cga(
         rebuildCompositeLuts()
         compositeActiveCached = computeCompositeActive()
         syncBdaTextRows()
+        refreshCompositeButton()
     }
 
     private fun rebuildCompositeLuts() {
@@ -162,6 +165,21 @@ internal class Cga(
 
     fun isCompositeActive(): Boolean = compositeActiveCached
 
+    /** True in CGA APA graphics (modes 4/5/6). */
+    fun isGraphicsMode(): Boolean = graphicsMode()
+
+    /**
+     * Enable/disable NTSC composite colour mixing.
+     * [enabled]=true forces ON (artefact colours); false forces RGBI OFF.
+     */
+    fun setCompositeEnabled(enabled: Boolean) {
+        compositeMode = if (enabled) CgaComposite.Mode.ON else CgaComposite.Mode.OFF
+        onVideoConfigChanged()
+        renderFrame()
+        updateWindowTitle()
+        refreshCompositeButton()
+    }
+
     /** Cycle AUTO → ON → OFF → AUTO (F12). */
     fun cycleCompositeMode() {
         compositeMode = when (compositeMode) {
@@ -172,6 +190,7 @@ internal class Cga(
         onVideoConfigChanged()
         renderFrame()
         updateWindowTitle()
+        refreshCompositeButton()
     }
 
     /** Nudge NTSC hue / tint dial by [delta] degrees (F11 / Shift+F11). */
@@ -638,6 +657,18 @@ internal class Cga(
         bar.add(left, BorderLayout.CENTER)
 
         val right = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 4))
+        val mixBtn = JButton().apply {
+            isFocusable = false
+            isFocusPainted = false
+            addActionListener {
+                // Toggle colour mixing: active → OFF, inactive → ON.
+                setCompositeEnabled(!isCompositeActive())
+                focusTarget.requestFocusInWindow()
+            }
+        }
+        compositeButton = mixBtn
+        right.add(mixBtn)
+        refreshCompositeButton()
         if (controls?.onTogglePause != null) {
             val pauseBtn = JButton().apply {
                 isFocusable = false
@@ -761,6 +792,27 @@ internal class Cga(
         SwingUtilities.invokeLater { w.title = windowTitle() }
     }
 
+    private fun refreshCompositeButton() {
+        val btn = compositeButton ?: return
+        SwingUtilities.invokeLater {
+            val graphics = graphicsMode()
+            btn.isVisible = graphics
+            if (!graphics) return@invokeLater
+            val on = compositeActiveCached
+            btn.text = if (on) COMPOSITE_ON_LABEL else COMPOSITE_OFF_LABEL
+            btn.toolTipText = if (on) {
+                "Composite colour mixing on (click for RGBI)"
+            } else {
+                "Composite colour mixing off (click for NTSC artefact colours)"
+            }
+            btn.foreground = if (on) {
+                java.awt.Color(0xC06000)
+            } else {
+                javax.swing.UIManager.getColor("Button.foreground")
+            }
+        }
+    }
+
     private fun pasteClipboard(focusTarget: JPanel) {
         focusTarget.requestFocusInWindow()
         val emit = onKeyScanCode ?: return
@@ -831,7 +883,14 @@ internal class Cga(
         val h = img.height
         val pixels = IntArray(w * h)
         img.getRGB(0, 0, w, h, pixels, 0, w)
-        return FramebufferSnapshot(w, h, pixels)
+        return FramebufferSnapshot(
+            width = w,
+            height = h,
+            argb = pixels,
+            graphicsMode = graphicsMode(),
+            compositeMode = compositeMode,
+            compositeActive = compositeActiveCached,
+        )
     }
 
     fun disposeWindow() {
@@ -941,6 +1000,9 @@ internal class Cga(
         const val PLAY_LABEL = "\u25B6"
         const val PAUSE_LABEL = "\u23F8"
         const val TURBO_LABEL = "\u23E9"
+        /** Composite colour-mix toggle labels. */
+        const val COMPOSITE_ON_LABEL = "NTSC"
+        const val COMPOSITE_OFF_LABEL = "RGBI"
 
         // Standard 16-color CGA/RGBI palette.
         val CGA_PALETTE = intArrayOf(

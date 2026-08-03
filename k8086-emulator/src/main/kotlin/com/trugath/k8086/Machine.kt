@@ -514,6 +514,14 @@ class Machine(
 
     fun copyFramebuffer(): FramebufferSnapshot? = cga?.copyFramebuffer()
 
+    fun setCompositeEnabled(enabled: Boolean) {
+        cga?.setCompositeEnabled(enabled)
+    }
+
+    fun isCompositeActive(): Boolean = cga?.isCompositeActive() == true
+
+    fun isCgaGraphicsMode(): Boolean = cga?.isGraphicsMode() == true
+
     /** Drain completed LPT1 print jobs (idle-flushes pending buffer first). */
     fun drainCompletedPrintJobs(): List<CapturedPrintJob> = parallel.drainCompletedJobs()
 

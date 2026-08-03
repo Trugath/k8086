@@ -46,10 +46,13 @@ class VmConsoleWindow(
     private lateinit var pauseButton: JButton
     private lateinit var turboButton: JButton
     private lateinit var audioButton: JButton
+    private lateinit var compositeButton: JButton
     private var mouseGrabbed = false
     private var suppressEscBreak = false
     private var lastMouseX = 0
     private var lastMouseY = 0
+    private var lastGraphicsMode = false
+    private var lastCompositeActive = false
 
     init {
         defaultCloseOperation = WindowConstants.DISPOSE_ON_CLOSE
@@ -216,6 +219,11 @@ class VmConsoleWindow(
         bar.add(left, BorderLayout.CENTER)
 
         val right = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 4))
+        compositeButton = toolbarButton("") {
+            host.setCompositeEnabled(vmId, !host.isCompositeActive(vmId))
+            refreshCompositeButton(lastGraphicsMode, host.isCompositeActive(vmId))
+        }
+        compositeButton.isVisible = false
         pauseButton = toolbarButton("") {
             if (host.isPaused(vmId)) host.resumeVm(vmId) else host.pauseVm(vmId)
             refreshTransportButtons()
@@ -228,6 +236,7 @@ class VmConsoleWindow(
             host.setAudioMuted(vmId, !host.isAudioMuted(vmId))
             refreshAudioButton()
         }
+        right.add(compositeButton)
         right.add(pauseButton)
         right.add(turboButton)
         right.add(audioButton)
@@ -274,6 +283,24 @@ class VmConsoleWindow(
         val muted = host.isAudioMuted(vmId)
         audioButton.text = if (muted) AUDIO_MUTED_LABEL else AUDIO_ON_LABEL
         audioButton.toolTipText = if (muted) "Unmute audio" else "Mute audio"
+    }
+
+    private fun refreshCompositeButton(graphicsMode: Boolean, compositeActive: Boolean) {
+        lastGraphicsMode = graphicsMode
+        lastCompositeActive = compositeActive
+        compositeButton.isVisible = graphicsMode
+        if (!graphicsMode) return
+        compositeButton.text = if (compositeActive) COMPOSITE_ON_LABEL else COMPOSITE_OFF_LABEL
+        compositeButton.toolTipText = if (compositeActive) {
+            "Composite colour mixing on (click for RGBI)"
+        } else {
+            "Composite colour mixing off (click for NTSC artefact colours)"
+        }
+        compositeButton.foreground = if (compositeActive) {
+            java.awt.Color(0xC06000)
+        } else {
+            UIManager.getColor("Button.foreground")
+        }
     }
 
     private fun promptChangeFloppy(drive: Int, letter: String) {
@@ -325,6 +352,9 @@ class VmConsoleWindow(
         }
         refreshTransportButtons()
         val frame = host.pollConsoleFrame(vmId) ?: return
+        if (frame.graphicsMode != lastGraphicsMode || frame.compositeActive != lastCompositeActive) {
+            refreshCompositeButton(frame.graphicsMode, frame.compositeActive)
+        }
         display.setFrame(frame)
     }
 
@@ -388,5 +418,7 @@ class VmConsoleWindow(
         const val PLAY_LABEL = "\u25B6"
         const val PAUSE_LABEL = "\u23F8"
         const val TURBO_LABEL = "\u23E9"
+        const val COMPOSITE_ON_LABEL = "NTSC"
+        const val COMPOSITE_OFF_LABEL = "RGBI"
     }
 }

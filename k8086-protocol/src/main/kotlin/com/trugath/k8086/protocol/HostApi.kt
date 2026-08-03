@@ -98,21 +98,41 @@ data class VmMetrics(
     val floppyPaths: List<String?> = emptyList(),
 )
 
+/** NTSC composite artifact-colour mixing (real CGA monitor colour bleed). */
+enum class CompositeKind {
+    AUTO,
+    ON,
+    OFF,
+}
+
 data class ConsoleFrame(
     val width: Int,
     val height: Int,
     /** Packed ARGB, row-major. */
     val argb: IntArray,
+    /** True in CGA APA graphics (modes 4/5/6). */
+    val graphicsMode: Boolean = false,
+    val compositeMode: CompositeKind = CompositeKind.AUTO,
+    /** True when the composite colour-mixing decoder is applied to this frame. */
+    val compositeActive: Boolean = false,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is ConsoleFrame) return false
-        return width == other.width && height == other.height && argb.contentEquals(other.argb)
+        return width == other.width &&
+            height == other.height &&
+            graphicsMode == other.graphicsMode &&
+            compositeMode == other.compositeMode &&
+            compositeActive == other.compositeActive &&
+            argb.contentEquals(other.argb)
     }
 
     override fun hashCode(): Int {
         var result = width
         result = 31 * result + height
+        result = 31 * result + graphicsMode.hashCode()
+        result = 31 * result + compositeMode.hashCode()
+        result = 31 * result + compositeActive.hashCode()
         result = 31 * result + argb.contentHashCode()
         return result
     }
@@ -214,6 +234,13 @@ interface HostApi {
     fun metrics(id: VmId): VmMetrics?
 
     fun pollConsoleFrame(id: VmId): ConsoleFrame?
+    /**
+     * Enable/disable NTSC composite colour mixing for CGA graphics.
+     * When [enabled] is true, forces composite ON; when false, forces RGBI OFF.
+     */
+    fun setCompositeEnabled(id: VmId, enabled: Boolean)
+    /** True when the composite colour-mixing decoder is currently applied. */
+    fun isCompositeActive(id: VmId): Boolean
     /** Drain completed LPT1 print jobs for [id] (may be empty). */
     fun pollPrintJobs(id: VmId): List<PrintJob>
     fun sendScanCode(id: VmId, code: Int)
