@@ -1,6 +1,7 @@
 package com.trugath.k8086
 
 import com.trugath.k8086.chipset.Ppi8255
+import com.trugath.k8086.config.CpuClocks
 import com.trugath.k8086.config.InitialVideoMode
 import com.trugath.k8086.config.MotherboardConfig
 import com.trugath.k8086.api.CpuModel
@@ -15,6 +16,14 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class MotherboardConfigTest {
+    @Test
+    fun clockDefaultsFollowCpuModel() {
+        assertEquals(CpuClocks.XT_HZ, MotherboardConfig().clockHz(), 0.0)
+        assertEquals(8_000_000.0, MotherboardConfig(cpu = CpuModel.I80286).clockHz(), 0.0)
+        assertEquals(10_000_000.0, MotherboardConfig(cpu = CpuModel.I80286, cpuMhz = 10.0).clockHz(), 0.0)
+        assertEquals(CpuClocks.XT_MHZ, MotherboardConfig(cpu = CpuModel.I8088).effectiveCpuMhz(), 1e-9)
+    }
+
     @Test
     fun sw1EncodesCoprocessorVideoAndRamBanks() {
         val cfg = MotherboardConfig(

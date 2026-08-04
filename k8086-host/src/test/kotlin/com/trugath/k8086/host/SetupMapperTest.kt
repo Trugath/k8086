@@ -99,7 +99,28 @@ class SetupMapperTest {
             VmId(UUID.randomUUID().toString()),
         )
         assertEquals("80286", def.motherboard.cpu)
+        assertEquals(8.0, def.motherboard.cpuMhz)
         assertEquals(CpuModel.I80286, SetupMapper.toMachineSetup(def).motherboard.cpu)
         assertEquals(CpuModel.I80286, CpuModel.fromWire("286"))
+    }
+
+    @Test
+    fun roundTripsCpuMhz() {
+        val setup = MachineSetup(
+            motherboard = MotherboardConfig(cpu = CpuModel.I80286, cpuMhz = 10.0),
+            graphics = GraphicsAdapter.CGA,
+            showVideo = false,
+        )
+        val def = SetupMapper.fromMachineSetup(
+            setup,
+            "286-10",
+            "u18.bin",
+            "u19.bin",
+            VmId(UUID.randomUUID().toString()),
+        )
+        assertEquals(10.0, def.motherboard.cpuMhz)
+        val back = SetupMapper.toMachineSetup(def)
+        assertEquals(10.0, back.motherboard.effectiveCpuMhz())
+        assertEquals(10_000_000.0, back.motherboard.clockHz())
     }
 }

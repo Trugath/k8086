@@ -115,7 +115,7 @@ data class MachineOptions(
      */
     val realtime: Boolean = true,
     /**
-     * Guest cycles/sec for realtime pacing. XT default ~4.77 MHz; 80286 AT-class ~8 MHz.
+     * Guest cycles/sec for realtime pacing. Defaults from [MotherboardConfig.clockHz].
      */
     val realtimeCpuHz: Double = RealtimePacer.CPU_HZ_8088,
     /** When set, [Machine.run] stops with [RunStopReason.CGA_EXPECT] once CGA text contains this. */
@@ -138,6 +138,7 @@ data class MachineOptions(
             enableCom1 = setup.enableCom1,
             floppy = setup.floppy,
             hardDisk = setup.hardDisk,
+            realtimeCpuHz = setup.motherboard.clockHz(),
         )
 
         /** Headless options for a managed multi-VM host worker. */

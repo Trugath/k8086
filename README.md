@@ -81,6 +81,7 @@ Shipped assets are enough for a cold clone (no parent rmDOS tree required):
 ```
 
 CLI flags: `--headless` (no display window, full-speed), `--cpu 8088|8086|80286`,
+`--mhz N` (guest clock; defaults per CPU; also `--cpu 80286@10`),
 `--no-cga` / `--initial-video special` (pair with `cards/vga`), `--serial-log PATH`
 (COM1 TX capture), `--quiet` (suppress usage banner). Guest write of ASCII `Shutdown` to
 port `0x8900` stops the run loop and exits 0.

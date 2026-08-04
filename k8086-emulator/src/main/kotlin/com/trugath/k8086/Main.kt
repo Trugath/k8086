@@ -1,6 +1,7 @@
 package com.trugath.k8086
 
 import com.trugath.k8086.api.CpuModel
+import com.trugath.k8086.config.CpuClocks
 import com.trugath.k8086.config.FloppyControllerConfig
 import com.trugath.k8086.config.GraphicsAdapter
 import com.trugath.k8086.config.HardDiskControllerConfig
@@ -65,11 +66,12 @@ private fun printUsage() {
     println("Usage: k8086 [floppy.img] [[@]harddisk.img] [--floppy path]... [--card path.jar[,k=v...]]...")
     println("         [--headless] [--serial-log path] [--parallel-log path] [--quiet]")
     println("         [--cga-expect text] [--max-instructions N]")
-    println("         [--cpu 8088|8086|80286] [--no-cga] [--initial-video cga80|special]")
+    println("         [--cpu 8088|8086|80286] [--mhz N] [--no-cga] [--initial-video cga80|special]")
     println("  Floppy drives optional (0–4). Repeat --floppy for B:/C:/D:.")
     println("  Hard disk optional; @prefix boots from it (enables HD controller).")
     println("  --headless       No display window; full-speed (realtime pacing off).")
     println("  --cpu MODEL      Motherboard CPU (default: 8088).")
+    println("  --mhz N          Guest clock MHz (8088: 4.77; 286: 6/8/10/12.5; default per CPU).")
     println("  --no-cga         Disable built-in CGA (use with a VGA/EGA ISA card).")
     println("  --initial-video M  SW1 video: cga80 (default) or special (card BIOS).")
     println("  --serial-log P   Append COM1 TX bytes to file P.")
@@ -112,20 +114,19 @@ private fun runCli(u18: String, u19: String, parsed: CliArgs): Int {
         } else {
             InitialVideoMode.CGA_80x25
         }
+    val motherboard = MotherboardConfig(
+        cpu = parsed.cpu,
+        cpuMhz = parsed.cpuMhz ?: CpuClocks.defaultMhz(parsed.cpu),
+        initialVideo = initialVideo,
+    )
     val options = MachineOptions(
-        motherboard = MotherboardConfig(
-            cpu = parsed.cpu,
-            initialVideo = initialVideo,
-        ),
+        motherboard = motherboard,
         graphics = parsed.graphics,
         showVideo = !parsed.headless,
         enableAudio = !parsed.headless,
         exitOnClose = !parsed.headless,
         realtime = !parsed.headless,
-        realtimeCpuHz = when (parsed.cpu) {
-            CpuModel.I80286 -> RealtimePacer.CPU_HZ_80286
-            else -> RealtimePacer.CPU_HZ_8088
-        },
+        realtimeCpuHz = motherboard.clockHz(),
         serialLogPath = parsed.serialLog,
         parallelLogPath = parsed.parallelLog,
         floppy = FloppyControllerConfig(
@@ -195,6 +196,8 @@ internal data class CliArgs(
     val floppyInt13Shim: Boolean = false,
     val hdInt13Bios: Boolean = false,
     val cpu: CpuModel = CpuModel.I8088,
+    /** Null = [CpuClocks.defaultMhz] for [cpu]. */
+    val cpuMhz: Double? = null,
     val graphics: GraphicsAdapter = GraphicsAdapter.CGA,
     val initialVideo: InitialVideoMode? = null,
 ) {
@@ -221,6 +224,7 @@ internal fun parseArgs(args: Array<String>): CliArgs {
         else -> false
     }
     var cpu = CpuModel.I8088
+    var cpuMhz: Double? = null
     var graphics = GraphicsAdapter.CGA
     var initialVideo: InitialVideoMode? = null
     var positional = 0
@@ -251,11 +255,30 @@ internal fun parseArgs(args: Array<String>): CliArgs {
             a == "--cpu" -> {
                 val v = args.getOrNull(i + 1)
                     ?: throw IllegalArgumentException("--cpu requires 8088|8086|80286")
-                cpu = parseCpuArg(v)
+                val parsed = parseCpuArgWithOptionalMhz(v)
+                cpu = parsed.first
+                if (parsed.second != null) cpuMhz = parsed.second
                 i += 2
             }
             a.startsWith("--cpu=") -> {
-                cpu = parseCpuArg(a.removePrefix("--cpu="))
+                val parsed = parseCpuArgWithOptionalMhz(a.removePrefix("--cpu="))
+                cpu = parsed.first
+                if (parsed.second != null) cpuMhz = parsed.second
+                i += 1
+            }
+            a == "--mhz" -> {
+                val v = args.getOrNull(i + 1)
+                    ?: throw IllegalArgumentException("--mhz requires a number")
+                cpuMhz = v.toDoubleOrNull()
+                    ?: throw IllegalArgumentException("bad --mhz: $v")
+                require(cpuMhz!! > 0.0) { "--mhz must be positive" }
+                i += 2
+            }
+            a.startsWith("--mhz=") -> {
+                val v = a.removePrefix("--mhz=")
+                cpuMhz = v.toDoubleOrNull()
+                    ?: throw IllegalArgumentException("bad --mhz: $v")
+                require(cpuMhz!! > 0.0) { "--mhz must be positive" }
                 i += 1
             }
             a == "--no-cga" -> {
@@ -381,8 +404,21 @@ internal fun parseArgs(args: Array<String>): CliArgs {
     return CliArgs(
         floppies, hardDisk, cards, headless, serialLog, parallelLog, quiet,
         cgaExpect, maxInstructions, turbo, floppyInt13Shim, hdInt13Bios,
-        cpu, graphics, initialVideo,
+        cpu, cpuMhz, graphics, initialVideo,
     )
+}
+
+/** Parse `--cpu 80286` or legacy `--cpu 80286@10`. */
+internal fun parseCpuArgWithOptionalMhz(value: String): Pair<CpuModel, Double?> {
+    val raw = value.trim()
+    val at = raw.lastIndexOf('@')
+    if (at > 0) {
+        val mhz = raw.substring(at + 1).toDoubleOrNull()
+            ?: throw IllegalArgumentException("bad --cpu MHz suffix: $value")
+        require(mhz > 0.0) { "--cpu MHz must be positive" }
+        return parseCpuArg(raw.substring(0, at)) to mhz
+    }
+    return parseCpuArg(raw) to null
 }
 
 internal fun parseCpuArg(value: String): CpuModel = when (value.trim().lowercase()) {

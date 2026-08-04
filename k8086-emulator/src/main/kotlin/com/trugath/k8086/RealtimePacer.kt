@@ -58,8 +58,10 @@ internal class RealtimePacer(
     companion object {
         /** IBM PC/XT clock. */
         const val CPU_HZ_8088 = 4_772_727.0
-        /** Typical early AT 80286 rate — Wolf3D is a 286-class title. */
+        /** Default early AT 80286 rate when no --mhz / motherboard clock is set. */
         const val CPU_HZ_80286 = 8_000_000.0
+        /** Period-appropriate 286 for early-90s VGA titles (e.g. Wolf3D). */
+        const val CPU_HZ_80286_10 = 10_000_000.0
         @Deprecated("Use CPU_HZ_8088", ReplaceWith("CPU_HZ_8088"))
         const val CPU_HZ = CPU_HZ_8088
         /** ~4 ms of guest time between pace checks. */

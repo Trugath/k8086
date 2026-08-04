@@ -28,8 +28,13 @@ enum class InitialVideoKind {
 }
 
 data class MotherboardSpec(
-    /** Wire name: `"8088"` (default, XT) or `"8086"`. */
+    /** Wire name: `"8088"` (default, XT), `"8086"`, or `"80286"`. */
     val cpu: String = "8088",
+    /**
+     * Guest clock in MHz. Omit / null → default for [cpu]
+     * (4.77 XT, 8 for 8086/80286).
+     */
+    val cpuMhz: Double? = null,
     val baseMemoryKb: Int = 640,
     val mathCoprocessor: Boolean = false,
     val initialVideo: InitialVideoKind = InitialVideoKind.CGA_80x25,

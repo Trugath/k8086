@@ -1,6 +1,7 @@
 package com.trugath.k8086.config
 
 import com.trugath.k8086.api.CpuModel
+import kotlin.math.abs
 
 /**
  * IBM 5155 / 5160 motherboard options (DIP SW1 + conventional RAM size).
@@ -9,8 +10,14 @@ import com.trugath.k8086.api.CpuModel
  * count walks through conventional RAM (below A0000h).
  */
 data class MotherboardConfig(
-    /** CPU socket: XT stock is 8088; 8086 is selectable for the same ISA. */
+    /** CPU socket: XT stock is 8088; 8086 / 80286 are selectable for the same ISA. */
     val cpu: CpuModel = CpuModel.I8088,
+    /**
+     * Guest CPU clock in MHz for realtime pacing (and audio/card sample timing).
+     * Null uses [CpuClocks.defaultMhz] for [cpu]. XT stock is ~4.77;
+     * Intel 80286 grades were 6 / 8 / 10 / 12.5.
+     */
+    val cpuMhz: Double? = null,
     /** Conventional RAM in KB (64…640). XT stock was often 256; 640 is typical for DOS. */
     val baseMemoryKb: Int = 640,
     /** Report 8087 present (SW1 bit 1) and enable the software numeric coprocessor. */
@@ -24,7 +31,14 @@ data class MotherboardConfig(
         require(baseMemoryKb in MIN_MEMORY_KB..MAX_MEMORY_KB) {
             "baseMemoryKb must be $MIN_MEMORY_KB..$MAX_MEMORY_KB (got $baseMemoryKb)"
         }
+        require(cpuMhz == null || cpuMhz > 0.0) { "cpuMhz must be positive (got $cpuMhz)" }
     }
+
+    /** Resolved MHz (explicit [cpuMhz] or the default for [cpu]). */
+    fun effectiveCpuMhz(): Double = cpuMhz ?: CpuClocks.defaultMhz(cpu)
+
+    /** Guest cycles/sec for realtime pacing. */
+    fun clockHz(): Double = CpuClocks.toHz(effectiveCpuMhz())
 
     /** End address (exclusive) of installed conventional RAM. */
     fun conventionalMemoryEnd(): Int = (baseMemoryKb * 1024).coerceIn(64 * 1024, 0xA0000)
@@ -56,7 +70,58 @@ data class MotherboardConfig(
         const val MIN_MEMORY_KB = 64
         const val MAX_MEMORY_KB = 640
         val MEMORY_PRESETS_KB = listOf(64, 128, 256, 512, 640)
+
+        fun withCpu(cpu: CpuModel, cpuMhz: Double = CpuClocks.defaultMhz(cpu)): MotherboardConfig =
+            MotherboardConfig(cpu = cpu, cpuMhz = cpuMhz)
     }
+}
+
+/** Clock-rate presets for realtime pacing (UI / CLI). */
+object CpuClocks {
+    /** Exact IBM PC/XT crystal. */
+    const val XT_MHZ = 4.772727
+    const val XT_HZ = 4_772_727.0
+
+    data class Preset(val mhz: Double, val label: String)
+
+    fun presets(cpu: CpuModel): List<Preset> = when (cpu) {
+        CpuModel.I8088 -> listOf(Preset(XT_MHZ, "4.77 MHz (XT)"))
+        CpuModel.I8086 -> listOf(
+            Preset(XT_MHZ, "4.77 MHz"),
+            Preset(8.0, "8 MHz"),
+            Preset(10.0, "10 MHz"),
+        )
+        CpuModel.I80286 -> listOf(
+            Preset(6.0, "6 MHz"),
+            Preset(8.0, "8 MHz (early AT)"),
+            Preset(10.0, "10 MHz"),
+            Preset(12.5, "12.5 MHz"),
+        )
+    }
+
+    fun defaultMhz(cpu: CpuModel): Double = when (cpu) {
+        CpuModel.I8088 -> XT_MHZ
+        CpuModel.I8086 -> 8.0
+        CpuModel.I80286 -> 8.0
+    }
+
+    /** Map a UI/CLI MHz value to guest cycles/sec (XT uses the exact crystal). */
+    fun toHz(mhz: Double): Double =
+        if (abs(mhz - XT_MHZ) < 0.02 || abs(mhz - 4.77) < 0.02) XT_HZ else mhz * 1_000_000.0
+
+    fun nearestPreset(cpu: CpuModel, mhz: Double): Preset {
+        val opts = presets(cpu)
+        return opts.minBy { abs(it.mhz - mhz) }
+    }
+
+    fun formatMhz(mhz: Double): String =
+        if (abs(mhz - XT_MHZ) < 0.02 || abs(mhz - 4.77) < 0.02) {
+            "4.77"
+        } else if (mhz == mhz.toLong().toDouble()) {
+            mhz.toLong().toString()
+        } else {
+            mhz.toString()
+        }
 }
 
 /** Initial video mode reported in SW1 / INT 11h (bits 4–5). */

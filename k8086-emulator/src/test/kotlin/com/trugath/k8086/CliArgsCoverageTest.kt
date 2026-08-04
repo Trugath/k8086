@@ -102,4 +102,16 @@ class CliArgsCoverageTest {
         val on = parseArgs(arrayOf(TestAssets.FLOPPY_PATH, "--floppy-int13-shim=true"))
         assertTrue(on.floppyInt13Shim)
     }
+
+    @Test
+    fun parseArgsSupportsMhzAndCpuAtSuffix() {
+        val spaced = parseArgs(arrayOf(TestAssets.FLOPPY_PATH, "--cpu", "80286", "--mhz", "10"))
+        assertEquals(com.trugath.k8086.api.CpuModel.I80286, spaced.cpu)
+        assertEquals(10.0, spaced.cpuMhz)
+        val eq = parseArgs(arrayOf(TestAssets.FLOPPY_PATH, "--cpu=80286@10"))
+        assertEquals(com.trugath.k8086.api.CpuModel.I80286, eq.cpu)
+        assertEquals(10.0, eq.cpuMhz)
+        val mhzEq = parseArgs(arrayOf(TestAssets.FLOPPY_PATH, "--cpu=8086", "--mhz=8"))
+        assertEquals(8.0, mhzEq.cpuMhz)
+    }
 }

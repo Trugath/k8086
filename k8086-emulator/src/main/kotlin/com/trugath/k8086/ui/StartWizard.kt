@@ -6,6 +6,7 @@ import com.trugath.k8086.api.CpuModel
 import com.trugath.k8086.config.CardCatalog
 import com.trugath.k8086.config.CardSelection
 import com.trugath.k8086.config.ConfigValidator
+import com.trugath.k8086.config.CpuClocks
 import com.trugath.k8086.config.FloppyControllerConfig
 import com.trugath.k8086.config.GraphicsAdapter
 import com.trugath.k8086.config.HardDiskControllerConfig
@@ -325,6 +326,8 @@ private class WizardDialog(
     private val cpuCombo = JComboBox(CpuModel.entries.map { it.label }.toTypedArray()).also {
         it.selectedIndex = CpuModel.I8088.ordinal
     }
+    private val clockCombo = JComboBox<String>()
+    private var clockPresets: List<CpuClocks.Preset> = emptyList()
     private val memoryCombo = JComboBox(MotherboardConfig.MEMORY_PRESETS_KB.map { "$it KB" }.toTypedArray()).also {
         it.selectedIndex = MotherboardConfig.MEMORY_PRESETS_KB.indexOf(640).coerceAtLeast(0)
     }
@@ -410,6 +413,8 @@ private class WizardDialog(
         }
         fdcCheck.addActionListener { updateDriveSections() }
         hdCheck.addActionListener { updateDriveSections() }
+        cpuCombo.addActionListener { refreshClockPresets(CpuClocks.defaultMhz(selectedCpu())) }
+        refreshClockPresets()
 
         if (mode == WizardMode.CREATE) {
             preferredFloppy()?.let { addFloppyRow(it) }
@@ -481,6 +486,7 @@ private class WizardDialog(
 
         val cpu = CpuModel.fromWire(def.motherboard.cpu)
         cpuCombo.selectedIndex = cpu.ordinal
+        refreshClockPresets(def.motherboard.cpuMhz ?: CpuClocks.defaultMhz(cpu))
         val memIdx = MotherboardConfig.MEMORY_PRESETS_KB.indexOf(def.motherboard.baseMemoryKb)
         memoryCombo.selectedIndex = if (memIdx >= 0) memIdx else MotherboardConfig.MEMORY_PRESETS_KB.indexOf(640).coerceAtLeast(0)
         coprocessorCheck.isSelected = def.motherboard.mathCoprocessor
@@ -801,8 +807,10 @@ private class WizardDialog(
             it.alignmentX = LEFT_ALIGNMENT
             it.add(JLabel("Processor:"))
             it.add(cpuCombo)
+            it.add(JLabel("Speed:"))
+            it.add(clockCombo)
         })
-        p.add(hint("IBM 5155/5160 shipped with an 8088. The 8086 option uses the same instruction engine with the 8086 silicon model."))
+        p.add(hint("IBM 5155/5160 shipped with an 8088 at 4.77 MHz. Faster clocks pace realtime guest time (and AdLib/speaker timing)."))
         p.add(Box.createVerticalStrut(12))
         p.add(sectionTitle("Conventional memory"))
         p.add(JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).also {
@@ -827,6 +835,26 @@ private class WizardDialog(
         p.add(postLoopCheck)
         p.add(hint("Equivalent to the motherboard “loop on POST” test switch — leave off for normal use."))
         p.add(Box.createVerticalGlue())
+    }
+
+    private fun selectedCpu(): CpuModel =
+        CpuModel.entries.getOrElse(cpuCombo.selectedIndex) { CpuModel.I8088 }
+
+    private fun selectedCpuMhz(): Double =
+        clockPresets.getOrNull(clockCombo.selectedIndex)?.mhz
+            ?: CpuClocks.defaultMhz(selectedCpu())
+
+    /** Rebuild speed presets for the current CPU; keep [preferredMhz] or the default. */
+    private fun refreshClockPresets(preferredMhz: Double? = null) {
+        val cpu = selectedCpu()
+        val keep = preferredMhz
+            ?: clockPresets.getOrNull(clockCombo.selectedIndex)?.mhz
+            ?: CpuClocks.defaultMhz(cpu)
+        clockPresets = CpuClocks.presets(cpu)
+        clockCombo.removeAllItems()
+        for (p in clockPresets) clockCombo.addItem(p.label)
+        val nearest = CpuClocks.nearestPreset(cpu, keep)
+        clockCombo.selectedIndex = clockPresets.indexOfFirst { it.mhz == nearest.mhz }.coerceAtLeast(0)
     }
 
     private fun buildAdaptersPage(): JPanel = paddedColumn().also { p ->
@@ -1097,7 +1125,7 @@ private class WizardDialog(
 
     private fun currentSetup(): MachineSetup {
         val floppies = floppyFields.map { it.text.trim() }.filter { it.isNotEmpty() }
-        val cpuModel = CpuModel.entries.getOrElse(cpuCombo.selectedIndex) { CpuModel.I8088 }
+        val cpuModel = selectedCpu()
         val memKb = MotherboardConfig.MEMORY_PRESETS_KB.getOrElse(memoryCombo.selectedIndex) { 640 }
         val videoMode = InitialVideoMode.entries.getOrElse(videoModeCombo.selectedIndex) {
             InitialVideoMode.CGA_80x25
@@ -1105,6 +1133,7 @@ private class WizardDialog(
         return MachineSetup(
             motherboard = MotherboardConfig(
                 cpu = cpuModel,
+                cpuMhz = selectedCpuMhz(),
                 baseMemoryKb = memKb,
                 mathCoprocessor = coprocessorCheck.isSelected,
                 initialVideo = videoMode,
@@ -1261,7 +1290,7 @@ private class WizardDialog(
         sb.appendLine()
         sb.appendLine("MOTHERBOARD")
         sb.appendLine("───────────")
-        sb.appendLine("CPU:       ${setup.motherboard.cpu.label}")
+        sb.appendLine("CPU:       ${setup.motherboard.cpu.label} @ ${CpuClocks.formatMhz(setup.motherboard.effectiveCpuMhz())} MHz")
         sb.appendLine("Memory:    ${setup.motherboard.baseMemoryKb} KB")
         sb.appendLine("8087:      ${if (setup.motherboard.mathCoprocessor) "yes" else "no"}")
         sb.appendLine("Video SW1: ${setup.motherboard.initialVideo.label}")
