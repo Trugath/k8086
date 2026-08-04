@@ -4,9 +4,38 @@ package com.trugath.k8086.cpu
  * String ops and IN/OUT / INS/OUTS xlat handlers.
  *
  * Extension handlers on [Emulator8086]; compile to static calls (no runtime cost).
+ *
+ * REP loops yield every [REP_ITER_QUANTUM] iterations so Machine can advance PIT
+ * and deliver IRQ0 between quanta. Continuation uses [CpuState.repContinue] —
+ * never rewinds to a bare REP prefix (that would leave [Emulator8086.prefixActive]
+ * set and drop the IRQ latch).
  */
 
 // --- xlat opcode group: stringIo ---
+
+/** Arm mid-REP resume; decoder suppresses IP advance and clears prefix holds. */
+internal fun Emulator8086.armRepContinue(itersDone: Int) {
+    repContinue = true
+    repContinueRawOpcode = rawOpcodeId
+    repContinueXlat = xlatOpcodeId
+    repContinueExtra = extra
+    repContinueIW = iW
+    repContinueRepMode = repMode
+    repContinueSegActive = segOverrideEn != 0
+    repContinueSeg = segOverride
+    repContinueCs = regs16[REG_CS].toInt() and 0xFFFF
+    repContinueIp = regIp and 0xFFFF
+    suppressIpAdvance = true
+    val per = CycleTables.BASE[rawOpcodeId and 0xFF].coerceAtLeast(1)
+    cycleOverride = per * itersDone.coerceAtLeast(1)
+}
+
+/** Yield only when IF=1 so CLI regions (e.g. HD INT 13h) stay atomic. */
+internal fun Emulator8086.shouldYieldRep(itersDone: Int): Boolean {
+    if (itersDone < REP_ITER_QUANTUM) return false
+    if ((regs16[REG_CX].toInt() and 0xFFFF) == 0) return false
+    return interruptsEnabled()
+}
 
 internal fun Emulator8086.executeXlat17() {
     // MOVSx (extra=0)|STOSx (extra=1)|LODSx (extra=2) - OPCODE 17
@@ -16,6 +45,7 @@ internal fun Emulator8086.executeXlat17() {
     val rep = repOverrideEn != 0
     val sourceIsAccumulator = extra and 1 != 0
     val destinationIsAccumulator = extra >= 2
+    var iters = 0
 
     while (true) {
         if (rep && (regs16[REG_CX].toInt() and 0xFFFF) == 0) break
@@ -67,6 +97,11 @@ internal fun Emulator8086.executeXlat17() {
         if (!sourceIsAccumulator) indexInc(REG_SI)
         if (!destinationIsAccumulator) indexInc(REG_DI)
         if (!rep) break
+        iters++
+        if (shouldYieldRep(iters)) {
+            armRepContinue(iters)
+            break
+        }
     }
 }
 
@@ -76,6 +111,7 @@ internal fun Emulator8086.executeXlat18() {
     val rep = repOverrideEn != 0
     var compared = false
     var faultedAfterCompare = false
+    var iters = 0
 
     while (true) {
         if (rep && (regs16[REG_CX].toInt() and 0xFFFF) == 0) break
@@ -128,9 +164,12 @@ internal fun Emulator8086.executeXlat18() {
         indexInc(REG_DI)
 
         if (rep) {
-            if (!(regs16[REG_CX].toInt() and 0xFFFF != 0 &&
-                    (opResult == 0) == (repMode != 0))
-            ) {
+            val keepGoing = (regs16[REG_CX].toInt() and 0xFFFF) != 0 &&
+                (opResult == 0) == (repMode != 0)
+            if (!keepGoing) break
+            iters++
+            if (shouldYieldRep(iters)) {
+                armRepContinue(iters)
                 break
             }
         } else {
@@ -177,6 +216,7 @@ internal fun Emulator8086.executeInsOuts() {
     val port = regs16[REG_DX].toInt() and 0xFFFF
     val srcSeg = if (segOverrideEn != 0) segOverride else REG_DS
     val rep = repOverrideEn != 0
+    var iters = 0
     while (true) {
         if (rep && (regs16[REG_CX].toInt() and 0xFFFF) == 0) break
         if (rep) {
@@ -213,5 +253,11 @@ internal fun Emulator8086.executeInsOuts() {
         if (pendingException >= 0) break
         indexInc(indexReg)
         if (!rep) break
+        iters++
+        // Yield REP INS/OUTS only with IF=1; CLI disk paths must not split.
+        if (shouldYieldRep(iters)) {
+            armRepContinue(iters)
+            break
+        }
     }
 }

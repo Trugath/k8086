@@ -110,15 +110,19 @@ data class MachineOptions(
     val floppy: FloppyControllerConfig = FloppyControllerConfig(enabled = true),
     val hardDisk: HardDiskControllerConfig = HardDiskControllerConfig(enabled = false),
     /**
-     * Pace [Machine.run] to ~4.77 MHz wall time. Independent of audio; needed for
+     * Pace [Machine.run] to wall time at [realtimeCpuHz]. Independent of audio; needed for
      * headless workstation VMs where the speaker line is closed.
      */
     val realtime: Boolean = true,
+    /**
+     * Guest cycles/sec for realtime pacing. XT default ~4.77 MHz; 80286 AT-class ~8 MHz.
+     */
+    val realtimeCpuHz: Double = RealtimePacer.CPU_HZ_8088,
     /** When set, [Machine.run] stops with [RunStopReason.CGA_EXPECT] once CGA text contains this. */
     val cgaExpect: String? = null,
     /** Instruction stride between CGA expect polls (BootIntegrationTest uses 200_000). */
     val cgaExpectEvery: Long = 200_000L,
-    /** Start with turbo (free-run) enabled — skips realtime pacing. */
+    /** Start with turbo (free-run) enabled ? skips realtime pacing. */
     val turbo: Boolean = false,
 ) {
     fun resolvedEnableAudio(): Boolean =
@@ -259,7 +263,7 @@ class Machine(
 
     private var interruptSource: InterruptSource? = null
     private val tickableList = mutableListOf<(Int) -> Unit>()
-    /** Snapshot for the hot loop — avoids ArrayList iterators every instruction. */
+    /** Snapshot for the hot loop ? avoids ArrayList iterators every instruction. */
     private var tickables: Array<(Int) -> Unit> = emptyArray()
     /** Coalesce PIT advances (~16 CPU clocks) to cut per-insn counter work. */
     private var pitTickDebt = 0
@@ -289,7 +293,7 @@ class Machine(
     private var watchingWarmBootCs = true
     private var warmBootPollCounter = 0
 
-    /** Host-visible floppy image paths (A:–D:), for toolbar labels / swap. */
+    /** Host-visible floppy image paths (A:?D:), for toolbar labels / swap. */
     private val floppyPaths = arrayOfNulls<String>(4)
 
     private val stopRequested = AtomicBoolean(false)
@@ -302,14 +306,15 @@ class Machine(
     private var turboActive = false
     private val shutDown = AtomicBoolean(false)
     /**
-     * Instruction counter for the run thread only. Plain [Long] (not [AtomicLong]) —
+     * Instruction counter for the run thread only. Plain [Long] (not [AtomicLong]) ?
      * the UI can tolerate a torn/stale read of [instructionCount]; atomic CAS every
      * insn showed up heavily in JFR.
      */
     private var instructionsExecuted = 0L
     private val startedAtMs = AtomicLong(0)
-    private val realtimePacer = if (options.realtime) RealtimePacer() else null
-    /** Reused by [advanceTime] — allocating a lambda every instruction showed up in JFR. */
+    private val realtimePacer =
+        if (options.realtime) RealtimePacer(cpuHz = options.realtimeCpuHz) else null
+    /** Reused by [advanceTime] ? allocating a lambda every instruction showed up in JFR. */
     private val paceKeepGoing: () -> Boolean = {
         !stopActive && !pauseActive
     }
@@ -331,7 +336,7 @@ class Machine(
     /** Execution breakpoints keyed by linear CS:IP (real-mode physical address). */
     private val breakpoints = ConcurrentHashMap.newKeySet<Int>()
     /**
-     * Cached emptiness for the run loop — [ConcurrentHashMap.isEmpty] calls sumCount()
+     * Cached emptiness for the run loop ? [ConcurrentHashMap.isEmpty] calls sumCount()
      * and showed up as a top hotspot with no breakpoints armed.
      */
     @Volatile
@@ -478,12 +483,12 @@ class Machine(
     private fun ppiFloppyCount(attachedImages: Int): Int =
         if (!options.floppy.enabled) 0 else attachedImages.coerceAtLeast(1)
 
-    /** Buttons for A:… when FDC is present; at least one drive if controller enabled. */
+    /** Buttons for A:? when FDC is present; at least one drive if controller enabled. */
     private fun floppyToolbarDriveCount(): Int =
         if (fdc == null) 0 else ppiFloppyCount(options.floppy.driveImages.size).coerceAtMost(4)
 
     /**
-     * Swap or eject floppy media for BIOS drive [drive] (0=A: … 3=D:) and signal
+     * Swap or eject floppy media for BIOS drive [drive] (0=A: ? 3=D:) and signal
      * the FDC disk-change line so guests can detect the media swap.
      */
     @Synchronized
@@ -549,6 +554,8 @@ class Machine(
 
     /** Turbo: skip audio device writes so they cannot pace the CPU. */
     fun isAudioOutputSuspended(): Boolean = turboActive
+
+    fun realtimeCpuHz(): Double = options.realtimeCpuHz
 
     fun setAudioMuted(muted: Boolean) {
         userAudioMuted = muted
@@ -686,7 +693,7 @@ class Machine(
         }
         val video = cga
         if (video != null) video.tickCpuCycles(cycles)
-        speaker.tickCpuCycles(cycles)
+        speaker.tickCpuCycles(cycles, options.realtimeCpuHz)
         val extras = tickables
         if (extras.isEmpty()) return
         for (i in extras.indices) extras[i](cycles)
@@ -885,7 +892,7 @@ class Machine(
             val f = File(env)
             if (f.isFile) return f
         }
-        // Beside U18: .../roms/u18.bin → .../roms/fdrom.bin (VM snapshots include this)
+        // Beside U18: .../roms/u18.bin ? .../roms/fdrom.bin (VM snapshots include this)
         val parent = File(u18RomPath).parentFile
         if (parent != null) {
             val besideU18 = File(parent, "fdrom.bin")
@@ -956,7 +963,7 @@ class Machine(
 
     private fun openPrintPreview(job: CapturedPrintJob) {
         val seq = ++printPreviewSeq
-        val title = "Print Preview — LPT1 (#$seq)"
+        val title = "Print Preview ? LPT1 (#$seq)"
         val text = PrintPreviewWindow.decodeCp437(job.bytes)
         val raw = job.bytes.copyOf()
         SwingUtilities.invokeLater {
@@ -972,6 +979,8 @@ class Machine(
         }
         val expect = options.cgaExpect
         val expectEvery = options.cgaExpectEvery.coerceAtLeast(1L)
+        val dumpDir = System.getenv("K8086_VGA_DUMP_DIR")
+        var lastDumpInsn = 0L
         try {
             while (instructionsExecuted < maxInstructions && !stopActive) {
                 if (pauseActive && !waitIfPaused()) break
@@ -980,6 +989,12 @@ class Machine(
                         stopReason = RunStopReason.GUEST_FAULT
                     }
                     break
+                }
+                if (dumpDir != null &&
+                    instructionsExecuted - lastDumpInsn >= 8_000_000L
+                ) {
+                    lastDumpInsn = instructionsExecuted
+                    dumpVgaPng(dumpDir, instructionsExecuted)
                 }
                 if (expect != null &&
                     instructionsExecuted % expectEvery == 0L &&
@@ -998,11 +1013,141 @@ class Machine(
                 stopReason = RunStopReason.MAX_INSTRUCTIONS
             }
         } finally {
+            if (dumpDir != null) {
+                dumpVgaPng(dumpDir, instructionsExecuted)
+            }
+            if (System.getenv("K8086_CARD_SNAPSHOT") == "1") {
+                val cs = cpu.getReg16(REG_CS)
+                val ip = cpu.getIp()
+                val linear = ((cs and 0xFFFF) shl 4) + (ip and 0xFFFF)
+                val bytes = (0 until 32).joinToString(" ") { i ->
+                    "%02X".format(cpu.readPhysByte(linear + i))
+                }
+                System.err.println(
+                    "STOP reason=$stopReason insn=$instructionsExecuted CS:IP=%04X:%04X IF=%d".format(
+                        cs, ip, if (cpu.interruptsEnabled()) 1 else 0,
+                    ),
+                )
+                System.err.println("CODE $bytes")
+                for (card in loadedCards()) {
+                    try {
+                        val m = card.javaClass.methods.firstOrNull {
+                            it.name == "debugSnapshot" && it.parameterCount == 0
+                        } ?: continue
+                        val ivt8Off = cpu.readPhysByte(0x20) or (cpu.readPhysByte(0x21) shl 8)
+                        val ivt8Seg = cpu.readPhysByte(0x22) or (cpu.readPhysByte(0x23) shl 8)
+                        System.err.println(
+                            "CARD_SNAPSHOT IVT8=%04X:%04X %s".format(
+                                ivt8Seg, ivt8Off, m.invoke(card),
+                            ),
+                        )
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            if (System.getenv("K8086_MEM_DUMP") == "1") {
+                dumpConventionalMemoryArena()
+            }
             shutdown()
         }
     }
 
-    /** 80×25 CGA ASCII rows joined by newlines (non-printable → space). */
+    /** INT 12h / BDA + MCB walk. Prefers LoL first-MCB (INT 21h AH=52). */
+    private fun dumpConventionalMemoryArena() {
+        fun u8(a: Int) = cpu.readPhysByte(a) and 0xFF
+        fun u16(a: Int) = u8(a) or (u8(a + 1) shl 8)
+        val memKb = u16(0x413)
+        val memTop = memKb * 64 // paragraphs (KB<<6)
+        System.err.println(
+            "MEM_DUMP insn=$instructionsExecuted BDA40:13=${memKb}KB memTop=%04X convEnd=0x${cpu.conventionalMemoryEnd.toString(16)}"
+                .format(memTop),
+        )
+        // AH=52 ? ES:BX = LoL; word at LoL+0 is first MCB segment.
+        val int21 = (u16(0x84) or (u16(0x86) shl 16))
+        val dosCs = (int21 ushr 16) and 0xFFFF
+        val dosIp = int21 and 0xFFFF
+        // rmDOS: dos_sysvars is in kernel CS; AH=52 returns CS:offset(dos_sysvars).
+        // Probe common pattern: first_mcb lives near dos_sysvars ? try reading LoL
+        // by simulating the published layout: find 'M'/'Z' chain that ends at memTop.
+        fun tryChain(start: Int): List<String>? {
+            var seg = start
+            var freeParas = 0
+            var busyParas = 0
+            val lines = mutableListOf<String>()
+            for (n in 0 until 64) {
+                if (seg >= 0xA000) return null
+                val base = seg shl 4
+                val typ = u8(base).toChar()
+                if (typ != 'M' && typ != 'Z') return null
+                val owner = u16(base + 1)
+                val size = u16(base + 3)
+                if (size == 0 || seg + 1 + size > memTop + 2) return null
+                lines += "  MCB %04X '%c' owner=%04X size=%04X (%.1fKB)".format(
+                    seg, typ, owner, size, size * 16 / 1024.0,
+                )
+                if (owner == 0) freeParas += size else busyParas += size
+                if (typ == 'Z') {
+                    val end = seg + 1 + size
+                    if (end !in (memTop - 2)..(memTop + 2)) return null
+                    lines += "MEM_DUMP: free=%.1fKB busy=%.1fKB blocks=${n + 1} end=%04X (dosCS=%04X)".format(
+                        freeParas * 16 / 1024.0,
+                        busyParas * 16 / 1024.0,
+                        end,
+                        dosCs,
+                    )
+                    return lines
+                }
+                seg = seg + 1 + size
+            }
+            return null
+        }
+        // Prefer LoL if AH=52 handler is the standard stub at dosIp; else scan.
+        var chain: List<String>? = null
+        // Scan from low RAM; first valid chain ending at INT12 top wins.
+        for (start in 0x0070 until 0x2000) {
+            chain = tryChain(start)
+            if (chain != null) {
+                System.err.println("MEM_DUMP: arena from seg=%04X".format(start))
+                chain.forEach { System.err.println(it) }
+                break
+            }
+        }
+        if (chain == null) {
+            System.err.println("MEM_DUMP: no valid MCB chain ending at memTop (dos CS:IP=%04X:%04X)".format(dosCs, dosIp))
+        }
+        // PSP:0002 of current process if we can find a large owned Z/M block
+        System.err.println("MEM_DUMP: current PSP guess via large owned blocks above")
+    }
+
+    /** Optional headless frame dump when `K8086_VGA_DUMP_DIR` is set. */
+    private fun dumpVgaPng(dir: String, insn: Long) {
+        val cs = cpu.getReg16(REG_CS)
+        val ip = cpu.getIp()
+        System.err.println(
+            "VGA_DIAG insn=%d CS:IP=%04X:%04X".format(insn, cs, ip),
+        )
+        for (card in loadedCards()) {
+            try {
+                val snap = card.javaClass.methods.firstOrNull {
+                    it.name == "debugSnapshot" && it.parameterCount == 0
+                }
+                if (snap != null) {
+                    System.err.println("  ${snap.invoke(card)}")
+                }
+                val m = card.javaClass.methods.firstOrNull {
+                    it.name == "writePng" && it.parameterCount == 1
+                } ?: continue
+                val path = java.io.File(dir, "frame-%09d.png".format(insn)).absolutePath
+                val ok = m.invoke(card, path) as? Boolean ?: false
+                if (ok) {
+                    System.err.println("VGA_DUMP $path")
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** 80?25 CGA ASCII rows joined by newlines (non-printable ? space). */
     fun cgaScreenText(): String = buildString {
         for (row in 0 until 25) {
             if (row > 0) append('\n')
@@ -1024,7 +1169,7 @@ class Machine(
     fun pollPostResumeF1(): Boolean {
         if (postResumeF1Pressed) return false
         postResumePollCounter++
-        // Never scan CGA every HLT quantum — that stalls headless boots.
+        // Never scan CGA every HLT quantum ? that stalls headless boots.
         if (postResumePollCounter % POST_RESUME_POLL_EVERY != 0L) return false
         if (!cgaTextContains(POST_RESUME_NEEDLE)) return false
         keyboard.typeKey(0x3B)
@@ -1072,7 +1217,7 @@ class Machine(
         }
 
         if (cpu.halted) {
-            // Single-step (TF) is taken after HLT completes, even with IF=0 — CheckIt
+            // Single-step (TF) is taken after HLT completes, even with IF=0 ? CheckIt
             // 2.1's CPU Interrupt Bug test ends in `HLT` and relies on this.
             if (cpu.trapFlag) {
                 cpu.serviceInterrupt(1)
@@ -1114,7 +1259,7 @@ class Machine(
         advanceTime(if (cycles < 1) 1 else cycles)
 
         // MOV SS / POP SS delay *all* instruction-boundary traps for one insn
-        // (maskable IRQ, NMI sampling, and TF) — Intel's fix for the early-8088
+        // (maskable IRQ, NMI sampling, and TF) ? Intel's fix for the early-8088
         // stack-switch race. CheckIt 2.1's CPU Interrupt Bug test single-steps
         // across POP SS and hangs on the following HLT if TF ignores the shadow
         // or if trapFlag sticks after INT 1 (FLAG_TF is cleared in pcInterrupt).
@@ -1124,7 +1269,7 @@ class Machine(
             cpu.serviceInterrupt(1)
         }
         // Always resync: INT 1 clears FLAG_TF, POPF/IRET may set it. Skipping this
-        // after service leaves trapFlag sticky → nested INT 1 forever.
+        // after service leaves trapFlag sticky ? nested INT 1 forever.
         cpu.updateTrapPending()
         if (!ssShadow && cpu.nmiPending && cpu.serviceNmiIfPending()) {
             irqLineLatched = false
@@ -1137,7 +1282,7 @@ class Machine(
 
     /**
      * Take a pending IRQ only if INTR was already latched after the previous
-     * instruction — matches 8088 sampling so POST's `OUT 21h` / `IN 21h` IMR
+     * instruction ? matches 8088 sampling so POST's `OUT 21h` / `IN 21h` IMR
      * probe is not preempted mid-pair (warm-boot error 101). Also respects the
      * one-instruction interrupt shadow after MOV SS / POP SS ([ssShadow]).
      */
@@ -1147,7 +1292,7 @@ class Machine(
             irqLineLatched = false
             return
         }
-        // Read IF/TF/prefix once — previously each helper re-hit the flag bytes.
+        // Read IF/TF/prefix once ? previously each helper re-hit the flag bytes.
         val ifEnabled = cpu.interruptsEnabled()
         val prefix = cpu.prefixActive()
         val trap = cpu.trapFlagSet()
@@ -1169,11 +1314,11 @@ class Machine(
     /**
      * Observe warm POST entry (CAD `ljmp` at EA82 or POST at E05B): stop further
      * host key injection and drop undelivered breaks (86Box-style). Do **not** arm
-     * this on every BIOS instruction while 40:72 is already 0x1234 — that would
+     * this on every BIOS instruction while 40:72 is already 0x1234 ? that would
      * discard Alt/Del during a second CAD's Ctrl INT9. PIC ISR is left for BIOS ICW1.
      */
     private fun noticeWarmBootRequest() {
-        // Under DOS (watchingWarmBootCs=false) skip CS reads most of the time —
+        // Under DOS (watchingWarmBootCs=false) skip CS reads most of the time ?
         // CAD entry into F000 is still seen within one poll quantum.
         if (!watchingWarmBootCs) {
             warmBootPollCounter++
@@ -1190,7 +1335,7 @@ class Machine(
         watchingWarmBootCs = true
         val ip = cpu.regIp and 0xFFFF
         if (ip != 0xEA82 && ip != 0xE05B) return
-        // Each POST may show the resume prompt again — allow one more auto-F1.
+        // Each POST may show the resume prompt again ? allow one more auto-F1.
         postResumeF1Pressed = false
         postResumePollCounter = 0L
         val flag = cpu.readPhysByte(0x472) or (cpu.readPhysByte(0x473) shl 8)

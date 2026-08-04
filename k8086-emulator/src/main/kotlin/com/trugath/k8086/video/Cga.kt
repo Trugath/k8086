@@ -469,6 +469,7 @@ internal class Cga(
                 // Keep Tab as a guest scancode (do not focus-traverse onto Ctrl+Alt+Del).
                 p.focusTraversalKeysEnabled = false
                 p.addKeyListener(object : KeyAdapter() {
+                    private val pressedScanCodes = HashSet<Int>()
                     override fun keyPressed(e: KeyEvent) {
                         when (e.keyCode) {
                             KeyEvent.VK_ESCAPE -> {
@@ -487,7 +488,9 @@ internal class Cga(
                                 return
                             }
                         }
-                        scanCodeFor(e)?.let { onKeyScanCode?.invoke(it) }
+                        val sc = scanCodeFor(e) ?: return
+                        if (!pressedScanCodes.add(sc)) return
+                        onKeyScanCode?.invoke(sc)
                     }
                     override fun keyReleased(e: KeyEvent) {
                         if (e.keyCode == KeyEvent.VK_F11 || e.keyCode == KeyEvent.VK_F12) return
@@ -495,7 +498,9 @@ internal class Cga(
                             suppressEscBreak = false
                             return
                         }
-                        scanCodeFor(e)?.let { onKeyScanCode?.invoke(it or 0x80) }
+                        val sc = scanCodeFor(e) ?: return
+                        if (!pressedScanCodes.remove(sc)) return
+                        onKeyScanCode?.invoke(sc or 0x80)
                     }
                 })
                 p.addMouseListener(object : MouseAdapter() {

@@ -41,27 +41,33 @@ class PcSpeaker(
     fun isSounding(): Boolean =
         speakerAudible() && pit.timer2Output()
 
-    /** Advance audio by [cpuCycles] at ~4.77 MHz CPU clock. */
-    fun tickCpuCycles(cpuCycles: Int) {
+    /** Advance audio by [cpuCycles] at [cpuHz] guest clock (default XT). */
+    fun tickCpuCycles(cpuCycles: Int, cpuHz: Double = CPU_HZ) {
         val out = line ?: return
         if (suspended) return
-        sampleAccum += cpuCycles * (SAMPLE_RATE / CPU_HZ)
+        val hz = if (cpuHz > 0.0) cpuHz else CPU_HZ
+        sampleAccum += cpuCycles * (SAMPLE_RATE / hz)
         var n = sampleAccum.toInt()
         if (n <= 0) return
         sampleAccum -= n
         while (n-- > 0) {
             buf[bufPos++] = sampleLevel()
             if (bufPos == buf.size) {
-                out.write(buf, 0, buf.size)
+                val free = out.available()
+                if (free >= buf.size) {
+                    out.write(buf, 0, buf.size)
+                }
                 bufPos = 0
             }
         }
     }
 
     fun close() {
-        line?.drain()
-        line?.stop()
-        line?.close()
+        try {
+            line?.stop()
+            line?.close()
+        } catch (_: Exception) {
+        }
     }
 
     private fun speakerDataEnabled(): Boolean = (ppi.portBValue() and 0x02) != 0

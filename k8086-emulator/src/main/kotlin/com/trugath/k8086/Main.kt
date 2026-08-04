@@ -1,8 +1,12 @@
 package com.trugath.k8086
 
+import com.trugath.k8086.api.CpuModel
 import com.trugath.k8086.config.FloppyControllerConfig
+import com.trugath.k8086.config.GraphicsAdapter
 import com.trugath.k8086.config.HardDiskControllerConfig
+import com.trugath.k8086.config.InitialVideoMode
 import com.trugath.k8086.config.MachineSetup
+import com.trugath.k8086.config.MotherboardConfig
 import com.trugath.k8086.isa.CardSpec
 import com.trugath.k8086.net.NetworkRegistry
 import com.trugath.k8086.protocol.SystemRomDefaults
@@ -61,9 +65,13 @@ private fun printUsage() {
     println("Usage: k8086 [floppy.img] [[@]harddisk.img] [--floppy path]... [--card path.jar[,k=v...]]...")
     println("         [--headless] [--serial-log path] [--parallel-log path] [--quiet]")
     println("         [--cga-expect text] [--max-instructions N]")
+    println("         [--cpu 8088|8086|80286] [--no-cga] [--initial-video cga80|special]")
     println("  Floppy drives optional (0–4). Repeat --floppy for B:/C:/D:.")
     println("  Hard disk optional; @prefix boots from it (enables HD controller).")
-    println("  --headless       No CGA window; full-speed (realtime pacing off).")
+    println("  --headless       No display window; full-speed (realtime pacing off).")
+    println("  --cpu MODEL      Motherboard CPU (default: 8088).")
+    println("  --no-cga         Disable built-in CGA (use with a VGA/EGA ISA card).")
+    println("  --initial-video M  SW1 video: cga80 (default) or special (card BIOS).")
     println("  --serial-log P   Append COM1 TX bytes to file P.")
     println("  --parallel-log P Append LPT1 captured bytes to file P.")
     println("  --cga-expect T   Stop successfully when CGA text contains T.")
@@ -98,11 +106,26 @@ private fun runCli(u18: String, u19: String, parsed: CliArgs): Int {
     val hdRaw = parsed.hardDisk
     val bootHd = hdRaw?.startsWith("@") == true
     val hdPath = hdRaw?.removePrefix("@")
+    val initialVideo = parsed.initialVideo
+        ?: if (parsed.graphics == GraphicsAdapter.NONE) {
+            InitialVideoMode.SPECIAL_OR_NONE
+        } else {
+            InitialVideoMode.CGA_80x25
+        }
     val options = MachineOptions(
+        motherboard = MotherboardConfig(
+            cpu = parsed.cpu,
+            initialVideo = initialVideo,
+        ),
+        graphics = parsed.graphics,
         showVideo = !parsed.headless,
         enableAudio = !parsed.headless,
         exitOnClose = !parsed.headless,
         realtime = !parsed.headless,
+        realtimeCpuHz = when (parsed.cpu) {
+            CpuModel.I80286 -> RealtimePacer.CPU_HZ_80286
+            else -> RealtimePacer.CPU_HZ_8088
+        },
         serialLogPath = parsed.serialLog,
         parallelLogPath = parsed.parallelLog,
         floppy = FloppyControllerConfig(
@@ -171,6 +194,9 @@ internal data class CliArgs(
     val turbo: Boolean = false,
     val floppyInt13Shim: Boolean = false,
     val hdInt13Bios: Boolean = false,
+    val cpu: CpuModel = CpuModel.I8088,
+    val graphics: GraphicsAdapter = GraphicsAdapter.CGA,
+    val initialVideo: InitialVideoMode? = null,
 ) {
     val floppy: String? get() = floppies.firstOrNull()
 }
@@ -194,6 +220,9 @@ internal fun parseArgs(args: Array<String>): CliArgs {
         "1", "true", "yes", "on" -> true
         else -> false
     }
+    var cpu = CpuModel.I8088
+    var graphics = GraphicsAdapter.CGA
+    var initialVideo: InitialVideoMode? = null
     var positional = 0
     var i = 0
     while (i < args.size) {
@@ -217,6 +246,30 @@ internal fun parseArgs(args: Array<String>): CliArgs {
             }
             a.startsWith("--card=") -> {
                 cards += parseCardSpec(a.removePrefix("--card="))
+                i += 1
+            }
+            a == "--cpu" -> {
+                val v = args.getOrNull(i + 1)
+                    ?: throw IllegalArgumentException("--cpu requires 8088|8086|80286")
+                cpu = parseCpuArg(v)
+                i += 2
+            }
+            a.startsWith("--cpu=") -> {
+                cpu = parseCpuArg(a.removePrefix("--cpu="))
+                i += 1
+            }
+            a == "--no-cga" -> {
+                graphics = GraphicsAdapter.NONE
+                i += 1
+            }
+            a == "--initial-video" -> {
+                val v = args.getOrNull(i + 1)
+                    ?: throw IllegalArgumentException("--initial-video requires cga80|special")
+                initialVideo = parseInitialVideoArg(v)
+                i += 2
+            }
+            a.startsWith("--initial-video=") -> {
+                initialVideo = parseInitialVideoArg(a.removePrefix("--initial-video="))
                 i += 1
             }
             a == "--headless" -> {
@@ -328,7 +381,23 @@ internal fun parseArgs(args: Array<String>): CliArgs {
     return CliArgs(
         floppies, hardDisk, cards, headless, serialLog, parallelLog, quiet,
         cgaExpect, maxInstructions, turbo, floppyInt13Shim, hdInt13Bios,
+        cpu, graphics, initialVideo,
     )
+}
+
+internal fun parseCpuArg(value: String): CpuModel = when (value.trim().lowercase()) {
+    "8088", "i8088" -> CpuModel.I8088
+    "8086", "i8086" -> CpuModel.I8086
+    "80286", "i80286", "286" -> CpuModel.I80286
+    else -> throw IllegalArgumentException("bad --cpu: $value (want 8088|8086|80286)")
+}
+
+internal fun parseInitialVideoArg(value: String): InitialVideoMode = when (value.trim().lowercase()) {
+    "cga80", "cga", "cga_80x25" -> InitialVideoMode.CGA_80x25
+    "cga40", "cga_40x25" -> InitialVideoMode.CGA_40x25
+    "special", "none", "vga", "ega" -> InitialVideoMode.SPECIAL_OR_NONE
+    "mda" -> InitialVideoMode.MDA_80x25
+    else -> throw IllegalArgumentException("bad --initial-video: $value (want cga80|special)")
 }
 
 internal fun parseCardSpec(spec: String): CardSpec {

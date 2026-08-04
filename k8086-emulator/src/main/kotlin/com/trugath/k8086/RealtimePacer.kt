@@ -1,14 +1,15 @@
 package com.trugath.k8086
 
 /**
- * Pace guest CPU time against wall clock at the IBM PC/XT ~4.77 MHz rate.
+ * Pace guest CPU time against wall clock at a configured MHz rate.
  *
- * Without this, headless / audio-disabled runs free-run as fast as the host CPU
+ * XT-class defaults to ~4.77 MHz; 80286 AT-class uses a higher rate (see [CPU_HZ_80286]).
+ * Without pacing, headless / audio-disabled runs free-run as fast as the host CPU
  * allows; AdLib/PC-speaker [SourceDataLine.write] accidentally provided pacing
  * when audio was enabled.
  */
 internal class RealtimePacer(
-    private val cpuHz: Double = CPU_HZ,
+    private val cpuHz: Double = CPU_HZ_8088,
     private val sliceCycles: Int = SLICE_CYCLES,
 ) {
     private var cycles = 0L
@@ -55,7 +56,12 @@ internal class RealtimePacer(
     }
 
     companion object {
-        const val CPU_HZ = 4_772_727.0
+        /** IBM PC/XT clock. */
+        const val CPU_HZ_8088 = 4_772_727.0
+        /** Typical early AT 80286 rate — Wolf3D is a 286-class title. */
+        const val CPU_HZ_80286 = 8_000_000.0
+        @Deprecated("Use CPU_HZ_8088", ReplaceWith("CPU_HZ_8088"))
+        const val CPU_HZ = CPU_HZ_8088
         /** ~4 ms of guest time between pace checks. */
         const val SLICE_CYCLES = 20_000
         private const val NANOS_PER_SECOND = 1_000_000_000.0

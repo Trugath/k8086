@@ -10,6 +10,8 @@ repositories {
 
 dependencies {
     compileOnly(project(":k8086-api"))
+    testImplementation(project(":k8086-api"))
+    testImplementation(kotlin("test"))
 }
 
 kotlin {
@@ -18,4 +20,8 @@ kotlin {
 
 tasks.jar {
     archiveBaseName.set("adlib")
+}
+
+tasks.test {
+    useJUnitPlatform()
 }

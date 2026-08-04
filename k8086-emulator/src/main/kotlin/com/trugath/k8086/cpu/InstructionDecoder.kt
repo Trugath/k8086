@@ -110,6 +110,15 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
     // Instruction decoding and execution - matches C code structure
     // Returns: false = stop, true = continue
     fun decodeAndExecuteInstruction(): Boolean {
+        // Resume mid-REP only at the suspended string CS:IP. While an IRQ/INT
+        // handler runs (different CS:IP), leave repContinue latched and fetch
+        // normally — chained BIOS IRET must not be coupled to continuation state.
+        if (cpu.repContinue &&
+            (cpu.regs16[REG_CS].toInt() and 0xFFFF) == cpu.repContinueCs &&
+            (cpu.regIp and 0xFFFF) == cpu.repContinueIp
+        ) {
+            return resumeRepContinue()
+        }
         val mask = cpu.physicalAddressMask
         val mem = cpu.mem
         val convEnd = cpu.conventionalMemoryEnd
@@ -119,6 +128,7 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         if (ipAddr >= RAM_SIZE || ipAddr < 0) return false
         cpu.pendingDivideError = false
         cpu.pendingException = -1
+        cpu.suppressIpAdvance = false
         // Remember the first byte of a fresh instruction (prefixes keep this IP).
         if (cpu.segOverrideEn == 0 && cpu.repOverrideEn == 0 && cpu.lockOverrideEn == 0) {
             cpu.instructionStartIp = ip
@@ -245,9 +255,10 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
             (tblBase[rawAfter].toInt() and 0xFF) +
             (tblIW[rawAfter].toInt() and 0xFF) * (if (cpu.iW) 2 else 1)
         val faultPending = cpu.pendingDivideError || cpu.pendingException >= 0
-        if (!(faultPending && !cpu.advanceIpBeforeDivideError())) {
+        if (!(faultPending && !cpu.advanceIpBeforeDivideError()) && !cpu.suppressIpAdvance) {
             cpu.regIp += ipIncrement
         }
+        cpu.suppressIpAdvance = false
         if (!faultPending && isPrefixOpcode(opcodeByte)) {
             cpu.instructionPrefixBytes += ipIncrement
         } else if (!faultPending) {
@@ -256,6 +267,8 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
             // opcode finishes; otherwise consecutive prefixed instructions keep the
             // previous hold alive, instructionPrefixBytes never resets, and the 286
             // 10-byte limit spuriously #GPs (PSP init ES: MOV chain).
+            // Also clears after a mid-REP quantum so Machine.pollHardwareInterrupt
+            // does not see prefixActive and drop the IRQ latch.
             cpu.segOverrideEn = 0
             cpu.repOverrideEn = 0
             cpu.lockOverrideEn = 0
@@ -293,6 +306,76 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
             cpu.pcInterrupt(vector, cpu.faultReturnIp())
         }
 
+        return true
+    }
+
+    /**
+     * Resume a REP string body after a quantum yield. Does not fetch a REP prefix,
+     * so [Emulator8086.prefixActive] stays false for Machine IRQ delivery between
+     * quanta. IP advances only when the REP finishes.
+     */
+    private fun resumeRepContinue(): Boolean {
+        cpu.pendingDivideError = false
+        cpu.pendingException = -1
+        cpu.suppressIpAdvance = false
+
+        cpu.rawOpcodeId = cpu.repContinueRawOpcode
+        cpu.xlatOpcodeId = cpu.repContinueXlat
+        cpu.extra = cpu.repContinueExtra
+        cpu.iW = cpu.repContinueIW
+        cpu.repMode = cpu.repContinueRepMode
+        cpu.repOverrideEn = 1
+        if (cpu.repContinueSegActive) {
+            cpu.segOverrideEn = 1
+            cpu.segOverride = cpu.repContinueSeg
+        } else {
+            cpu.segOverrideEn = 0
+        }
+        cpu.lockOverrideEn = 0
+        cpu.repContinue = false
+        cpu.setFlagsType = 0
+        cpu.iModSize = 0
+        cpu.iMod = 0
+
+        val opcodeByte = cpu.rawOpcodeId and 0xFF
+        when (cpu.xlatOpcodeId) {
+            17 -> cpu.executeXlat17()
+            18 -> cpu.executeXlat18()
+            57 -> cpu.executeInsOuts()
+            else -> {
+                cpu.repContinue = false
+                cpu.suppressIpAdvance = false
+            }
+        }
+
+        cpu.lastOpcodeByte = opcodeByte
+        cpu.lastInstructionCycles = if (cpu.cycleOverride != CYCLE_OVERRIDE_NONE) {
+            cpu.cycleOverride
+        } else {
+            CycleTables.BASE[opcodeByte]
+        }
+        cpu.cycleOverride = CYCLE_OVERRIDE_NONE
+
+        val faultPending = cpu.pendingDivideError || cpu.pendingException >= 0
+        // String body encodings are one byte (A4–AF, 6C–6F); advance only when done.
+        if (!faultPending && !cpu.suppressIpAdvance && !cpu.repContinue) {
+            cpu.regIp = (cpu.regIp + 1) and 0xFFFF
+        }
+        cpu.suppressIpAdvance = false
+
+        // Always clear holds so the next Machine poll can take IRQ0.
+        cpu.segOverrideEn = 0
+        cpu.repOverrideEn = 0
+        cpu.lockOverrideEn = 0
+
+        if (cpu.pendingDivideError) {
+            cpu.pendingDivideError = false
+            cpu.pcInterrupt(0, cpu.faultReturnIp())
+        } else if (cpu.pendingException >= 0) {
+            val vector = cpu.pendingException
+            cpu.pendingException = -1
+            cpu.pcInterrupt(vector, cpu.faultReturnIp())
+        }
         return true
     }
 }

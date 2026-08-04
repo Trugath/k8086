@@ -56,11 +56,16 @@ class CgaIoCoverageTest {
         cga.ioWriteByte(0x3D9, 0x30)
         cpu.writePhysByte(0xB8000, 0xFF)
         cga.renderFrame()
+        val mode4 = cga.copyFramebuffer()!!
+        assertEquals(320, mode4.width)
+        assertTrue(mode4.graphicsMode)
 
         // Mode 6 RGB (composite off)
         cga.compositeMode = CgaComposite.Mode.OFF
         cga.ioWriteByte(0x3D8, 0x1E)
         cga.renderFrame()
+        val mode6 = cga.copyFramebuffer()!!
+        assertEquals(640, mode6.width)
 
         // Mode 4 forced composite path
         cga.compositeMode = CgaComposite.Mode.ON

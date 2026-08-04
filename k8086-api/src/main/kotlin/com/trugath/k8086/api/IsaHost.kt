@@ -74,6 +74,12 @@ interface IsaHost {
      */
     fun isAudioOutputSuspended(): Boolean = false
 
+    /**
+     * Guest cycles/sec used for realtime pacing (XT ~4.77e6, 80286 AT ~8e6).
+     * Sound cards convert CPU ticks to PCM using this rate. Default XT clock.
+     */
+    fun realtimeCpuHz(): Double = 4_772_727.0
+
     fun cpuRead8(addr: Int): Int
     fun cpuWrite8(addr: Int, value: Int)
 
@@ -82,4 +88,10 @@ interface IsaHost {
      * Empty or unknown [networkId] yields [NullNicPort].
      */
     fun attachNic(networkId: String, mac: ByteArray): NicPort = NullNicPort
+
+    /**
+     * Console toolbar / input hooks for cards that own the primary display window.
+     * Null when the host has no interactive console (headless stubs).
+     */
+    fun consoleControls(): IsaConsoleControls? = null
 }

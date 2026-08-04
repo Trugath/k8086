@@ -18,7 +18,7 @@ class AdlibCardFactory : IsaCardFactory {
     override fun descriptor() = CardDescriptor(
         id = "com.trugath.k8086.cards.adlib",
         name = "AdLib / OPL2",
-        description = "Classic AdLib ports with timer detection and simple square-wave audio.",
+        description = "Classic AdLib ports with timer detection and OPL2 2-op FM audio.",
         category = "Sound",
         fields = listOf(
             ConfigField(
@@ -27,7 +27,7 @@ class AdlibCardFactory : IsaCardFactory {
             ),
             ConfigField(
                 "audio", "Host audio", ConfigFieldType.BOOL, "true",
-                "Enable square-wave mixer output",
+                "Enable OPL2 FM mixer output",
             ),
         ),
     )
@@ -53,9 +53,8 @@ class AdlibCardFactory : IsaCardFactory {
 /**
  * AdLib / OPL2-compatible card at 0x388/0x389.
  *
- * Keeps timer/status behaviour for detection, plus a lightweight FM-less square-wave
- * mixer driven from channel F-number / block / key-on registers so games that program
- * AdLib are not silent. Not a real OPL2 core.
+ * Timer/status behaviour for detection plus a self-contained 2-op FM core
+ * ([Opl2Core]) for music and effects.
  *
  * Config: `port=0x388`, `audio=true|false` (default: on when a display is present)
  */
@@ -66,7 +65,7 @@ class AdlibCard(
     override val id = "com.trugath.k8086.cards.adlib"
     override val name = "AdLib OPL2 (0x${portBase.toString(16)})"
 
-    private val regs = IntArray(256)
+    private val opl = Opl2Core(SAMPLE_RATE)
     private var index = 0
     private var status = 0x00
     private var timer1 = 0
@@ -77,9 +76,11 @@ class AdlibCard(
     private var sampleAccum = 0.0
     private val buf = ByteArray(256)
     private var bufPos = 0
-    private val phase = DoubleArray(9)
 
     private var attachedHost: IsaHost? = null
+
+    /** Exposed for unit tests. */
+    internal val core: Opl2Core get() = opl
 
     override fun attach(host: IsaHost) {
         attachedHost = host
@@ -106,13 +107,15 @@ class AdlibCard(
 
     override fun detach() {
         attachedHost = null
-        line?.drain()
-        line?.stop()
-        line?.close()
+        // Do not drain() — can block indefinitely if the line is stuck.
+        try {
+            line?.stop()
+            line?.close()
+        } catch (_: Exception) {
+        }
     }
 
     private fun writeData(value: Int) {
-        regs[index] = value
         when (index) {
             0x02 -> timer1 = value
             0x03 -> timer2 = value
@@ -120,7 +123,10 @@ class AdlibCard(
                 timerCtrl = value
                 if ((value and 0x80) != 0) status = status and 0x1F
             }
+            else -> opl.writeReg(index, value)
         }
+        // Keep timer regs visible in the OPL register file too.
+        if (index in 0x02..0x04) opl.regs[index] = value and 0xFF
     }
 
     private var cycleAccum = 0
@@ -144,45 +150,34 @@ class AdlibCard(
         // Turbo must not touch the audio device — write() blocks and paces the CPU.
         if (attachedHost?.isAudioOutputSuspended() == true) return
         val muted = attachedHost?.isAudioMuted() == true
-        sampleAccum += cpuCycles * (SAMPLE_RATE / CPU_HZ)
+        val cpuHz = attachedHost?.realtimeCpuHz()?.takeIf { it > 0.0 } ?: CPU_HZ_DEFAULT
+        sampleAccum += cpuCycles * (SAMPLE_RATE / cpuHz)
         var n = sampleAccum.toInt()
         if (n <= 0) return
         sampleAccum -= n
+        // Cap work per tick — a huge REP cycle dump must not starve the CPU loop.
+        if (n > 512) {
+            sampleAccum += (n - 512)
+            n = 512
+        }
         while (n-- > 0) {
-            val sample = if (muted) 0 else mixSample()
+            val sample = if (muted) 0 else opl.renderSample8()
             // Unsigned 8-bit: midpoint 0x80 is silence. Always write so mute does not underrun.
             buf[bufPos++] = (sample + 128).toByte()
             if (bufPos == buf.size) {
-                out.write(buf, 0, buf.size)
+                // Never block the emu thread — overproducing (wrong Hz) or a full
+                // buffer would freeze VGA presents while PCM keeps draining.
+                val free = out.available()
+                if (free >= buf.size) {
+                    out.write(buf, 0, buf.size)
+                }
                 bufPos = 0
             }
         }
     }
 
-    private fun mixSample(): Int {
-        var mix = 0
-        var voices = 0
-        for (ch in 0 until 9) {
-            val b0 = regs[0xB0 + ch]
-            if ((b0 and 0x20) == 0) continue // key-off
-            val fnum = (regs[0xA0 + ch] and 0xFF) or ((b0 and 0x03) shl 8)
-            val block = (b0 shr 2) and 0x07
-            if (fnum == 0) continue
-            // Approximate OPL tone: f ≈ fnum * 49716 / 2^(20 - block)
-            val hz = fnum * 49716.0 / (1 shl (20 - block))
-            phase[ch] += hz / SAMPLE_RATE
-            if (phase[ch] >= 1.0) phase[ch] -= 1.0
-            mix += if (phase[ch] < 0.5) 24 else -24
-            voices++
-        }
-        return when {
-            voices == 0 -> 0
-            else -> (mix / voices).coerceIn(-128, 127)
-        }
-    }
-
     /** Test helper: true when any channel has key-on. */
-    fun anyKeyOn(): Boolean = (0 until 9).any { (regs[0xB0 + it] and 0x20) != 0 }
+    fun anyKeyOn(): Boolean = opl.anyKeyOn()
 
     private fun openLine(): SourceDataLine? = try {
         val format = AudioFormat(SAMPLE_RATE.toFloat(), 8, 1, false, false)
@@ -198,7 +193,10 @@ class AdlibCard(
 
     companion object {
         const val SAMPLE_RATE = 22050.0
-        const val CPU_HZ = 4_772_727.0
+        /** Fallback when host does not report [IsaHost.realtimeCpuHz]. */
+        const val CPU_HZ_DEFAULT = 4_772_727.0
+        @Deprecated("Use CPU_HZ_DEFAULT", ReplaceWith("CPU_HZ_DEFAULT"))
+        const val CPU_HZ = CPU_HZ_DEFAULT
     }
 }
 

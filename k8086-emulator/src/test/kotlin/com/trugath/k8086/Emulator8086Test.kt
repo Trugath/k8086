@@ -1151,6 +1151,42 @@ class Emulator8086Test {
     }
 
     @Test
+    fun testRepStosbQuantumYieldsThenCompletesWithoutPrefixHold() {
+        val testEmulator = Emulator8086()
+        testEmulator.setIp(0x200)
+        testEmulator.setReg16(REG_CS, 0x1000)
+        testEmulator.setReg16(REG_ES, 0x1000)
+        testEmulator.setReg16(REG_DI, 0x0700)
+        testEmulator.setReg8(REG_AL, 0x5A)
+        val total = REP_ITER_QUANTUM * 3 + 7
+        testEmulator.setReg16(REG_CX, total)
+        testEmulator.setReg8(FLAG_DF, 0)
+        testEmulator.setReg8(FLAG_IF, 1) // quantum yields only when IF=1
+        val baseAddr = 0x1000 * 16 + 0x0700
+        testEmulator.writeInstruction(byteArrayOf(0xF3.toByte(), 0xAA.toByte()))
+        assertTrue(testEmulator.executeSingleInstruction(), "REP prefix")
+        var steps = 0
+        assertTrue(testEmulator.executeSingleInstruction(), "first string quantum")
+        steps++
+        while (testEmulator.getReg16(REG_CX) != 0 && steps < 64) {
+            assertFalse(
+                testEmulator.prefixActive(),
+                "prefix holds must be clear between REP quanta (step $steps)",
+            )
+            assertTrue(testEmulator.executeSingleInstruction(), "REP quantum step $steps")
+            steps++
+        }
+        assertEquals(0, testEmulator.getReg16(REG_CX), "CX drained across quanta")
+        assertTrue(steps > 1, "large REP should take multiple steps (got $steps)")
+        assertEquals(4, steps, "CX=${REP_ITER_QUANTUM * 3 + 7} → 4 quanta at quantum=$REP_ITER_QUANTUM")
+        assertFalse(testEmulator.prefixActive(), "no leftover prefix after REP")
+        for (i in 0 until total) {
+            assertEquals(0x5A, testEmulator.getMem(baseAddr + i), "Byte $i")
+        }
+        assertEquals(0x0700 + total, testEmulator.getReg16(REG_DI))
+    }
+
+    @Test
     fun testCmpsbSetsZeroFlagWithoutModifyingMemory() {
         val testEmulator = Emulator8086()
         testEmulator.setIp(0x200)

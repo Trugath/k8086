@@ -21,6 +21,16 @@ class Pic8259 : IoDevice, InterruptSource {
     private var icw1 = 0
     private var readIsr = false     // OCW3: 0 = read IRR, 1 = read ISR
 
+    /**
+     * Consecutive times [pendingVector] would have picked IRQ0 while IRQ1 was
+     * also requestable. AdLib/Wolf reprograms PIT to ~700 Hz; under turbo the
+     * timer re-asserts every few guest instructions, so fixed priority forever
+     * starves IRQ1 and LastScan never updates. Real XT hardware has ~1.4 ms of
+     * idle between ticks for the keyboard; we approximate that by occasionally
+     * preferring IRQ1 (see [IRQ1_FAIRNESS_AFTER]).
+     */
+    private var irq0WinsWhileIrq1Pending = 0
+
     fun lowerIrq(irq: Int) {
         if (irq in 0..7) irr = irr and (1 shl irq).inv()
     }
@@ -45,6 +55,7 @@ class Pic8259 : IoDevice, InterruptSource {
                     imr = 0
                     isr = 0
                     irr = 0
+                    irq0WinsWhileIrq1Pending = 0
                     initStep = 1 // next data write is ICW2
                 }
                 (v and 0x08) != 0 -> { // OCW3
@@ -89,8 +100,26 @@ class Pic8259 : IoDevice, InterruptSource {
     // interrupt of equal-or-higher priority. Returns its CPU vector, or -1.
     override fun pendingVector(): Int {
         val requestable = irr and imr.inv()
-        if (requestable == 0) return -1
+        if (requestable == 0) {
+            irq0WinsWhileIrq1Pending = 0
+            return -1
+        }
         val higherInService = isr
+        val irq0Bit = 1
+        val irq1Bit = 2
+        val bothTimerAndKbd =
+            (requestable and irq0Bit) != 0 &&
+                (requestable and irq1Bit) != 0 &&
+                (higherInService and 0x03) == 0
+        if (bothTimerAndKbd) {
+            irq0WinsWhileIrq1Pending++
+            if (irq0WinsWhileIrq1Pending > IRQ1_FAIRNESS_AFTER) {
+                irq0WinsWhileIrq1Pending = 0
+                return vectorOffset + 1
+            }
+        } else if ((requestable and irq1Bit) == 0) {
+            irq0WinsWhileIrq1Pending = 0
+        }
         for (irq in 0..7) {
             val bit = 1 shl irq
             if ((requestable and bit) != 0) {
@@ -108,7 +137,16 @@ class Pic8259 : IoDevice, InterruptSource {
             val bit = 1 shl irq
             irr = irr and bit.inv()
             isr = isr or bit
+            if (irq == 1) irq0WinsWhileIrq1Pending = 0
         }
+    }
+
+    companion object {
+        /**
+         * After this many IRQ0 resolutions while IRQ1 is also pending, prefer
+         * the keyboard once. Keeps ~700 Hz music workable without dead keys.
+         */
+        const val IRQ1_FAIRNESS_AFTER = 2
     }
 
     private fun lowestSetBit(x: Int): Int {

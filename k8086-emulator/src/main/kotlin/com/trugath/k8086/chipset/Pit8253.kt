@@ -174,6 +174,7 @@ class Pit8253(private val pic: Pic8259) : IoDevice {
             }
             c.count = period
             if ((completions and 1) != 0) c.output = !c.output
+            // Edge-triggered IRR: multiple raises before ACK still look like one IRQ.
             if (raiseIrq0) pic.raiseIrq(0)
             if (refresh) refreshPending = true
             if (c.mode == 0) {

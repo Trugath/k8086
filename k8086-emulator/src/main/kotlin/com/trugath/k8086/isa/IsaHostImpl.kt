@@ -3,6 +3,7 @@ package com.trugath.k8086.isa
 import com.trugath.k8086.Machine
 import com.trugath.k8086.api.DmaChannel
 import com.trugath.k8086.api.IoDevice
+import com.trugath.k8086.api.IsaConsoleControls
 import com.trugath.k8086.api.IsaHost
 import com.trugath.k8086.api.MemoryRegion
 import com.trugath.k8086.api.NicPort
@@ -87,10 +88,29 @@ class IsaHostImpl(
 
     override fun isAudioOutputSuspended(): Boolean = machine.isAudioOutputSuspended()
 
+    override fun realtimeCpuHz(): Double = machine.realtimeCpuHz()
+
     override fun cpuRead8(addr: Int): Int = machine.cpu.readPhysByte(addr)
 
     override fun cpuWrite8(addr: Int, value: Int) = machine.cpu.writePhysByte(addr, value)
 
     override fun attachNic(networkId: String, mac: ByteArray): NicPort =
         machine.attachNic(networkId, mac)
+
+    override fun consoleControls(): IsaConsoleControls = object : IsaConsoleControls {
+        override fun floppyDriveCount(): Int = machine.floppyDriveCount()
+        override fun floppyPath(drive: Int): String? = machine.floppyImagePath(drive)
+        override fun changeFloppy(drive: Int, path: String?) = machine.changeFloppy(drive, path)
+        override fun sendCtrlAltDelete() = machine.sendCtrlAltDelete()
+        override fun togglePause() {
+            if (machine.isPaused()) machine.resume() else machine.requestPause()
+        }
+        override fun isPaused(): Boolean = machine.isPaused()
+        override fun toggleTurbo() = machine.setTurbo(!machine.isTurbo())
+        override fun isTurbo(): Boolean = machine.isTurbo()
+        override fun toggleAudioMute() = machine.setAudioMuted(!machine.isAudioMuted())
+        override fun isUserAudioMuted(): Boolean = machine.isAudioMuted()
+        override fun enqueueKeyScanCode(code: Int) = machine.enqueueScanCode(code)
+        override fun setConsoleFocused(focused: Boolean) = machine.setConsoleFocused(focused)
+    }
 }

@@ -43,9 +43,10 @@ and collisions detected before boot.
 | `rtc-mm58167` | `com.trugath.k8086.cards.rtc-mm58167` | SixPak-style RTC @ 0x2C0 + INT 1Ah option ROM |
 | `lpt` | `com.trugath.k8086.cards.lpt` | Parallel port (default LPT2 @ 0x278) |
 | `gameport` | `com.trugath.k8086.cards.gameport` | Game adapter stub @ 0x201 |
-| `adlib` | `com.trugath.k8086.cards.adlib` | AdLib OPL ports + square-wave audio (not full FM) |
+| `adlib` | `com.trugath.k8086.cards.adlib` | AdLib OPL2 ports + 2-op FM audio |
 | `heartbeat` | `com.trugath.k8086.cards.heartbeat` | Periodic IRQ heartbeat |
 | `ems-window` | `com.trugath.k8086.cards.ems-window` | Page-frame EMS window |
+| `vga` | `com.trugath.k8086.cards.vga` | VGA: mode 03h text (B8000) + Mode 13h / Mode Y + C000 ROM |
 | `de220` | `com.trugath.k8086.cards.de220` | D-Link DE-220 NE2000 NIC (virtual NAT network) |
 
 ### 5155 + 1MB memory + SixPak-style I/O

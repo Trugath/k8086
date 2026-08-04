@@ -92,6 +92,36 @@ internal open class CpuState {
     @JvmField
     internal var repMode: Int = 0
 
+    /**
+     * Mid-REP resume: next [Emulator8086.step] re-enters the string body without
+     * re-fetching a REP prefix (so [prefixActive] is false between quanta and
+     * Machine can deliver IRQ0). Cleared when the REP completes or faults.
+     */
+    @JvmField
+    internal var repContinue = false
+    @JvmField
+    internal var repContinueRawOpcode = 0
+    @JvmField
+    internal var repContinueXlat = 0
+    @JvmField
+    internal var repContinueExtra = 0
+    @JvmField
+    internal var repContinueIW = false
+    @JvmField
+    internal var repContinueRepMode = 0
+    @JvmField
+    internal var repContinueSegActive = false
+    @JvmField
+    internal var repContinueSeg = 0
+    /** CS:IP of the suspended string body — resume only when CS:IP matches (not in ISR). */
+    @JvmField
+    internal var repContinueCs = 0
+    @JvmField
+    internal var repContinueIp = 0
+    /** When true, skip IP advance after this string quantum (more CX remains). */
+    @JvmField
+    internal var suppressIpAdvance = false
+
     /** CS:IP of the first byte of a current instruction (including prefixes). */
     @JvmField
     internal var instructionStartIp = 0

@@ -82,6 +82,14 @@ internal const val OF_UNCHANGED = -1
 /** Sentinel for [CpuState.cycleOverride]: consult [CycleTables] instead. */
 internal const val CYCLE_OVERRIDE_NONE = -1
 
+/**
+ * Max REP string iterations per [step] when IF=1. Long fills (Wolf Mode Y) otherwise
+ * starve PIT/IRQ0 inside one giant instruction. Resume via [CpuState.repContinue].
+ * Keep this large enough that InitGame “Working…” still completes; too-small values
+ * regress HD IRQ livelock edge cases and stall resource load.
+ */
+internal const val REP_ITER_QUANTUM = 256
+
 /** ALU ops for [Emulator8086.memOp] — Int so the when compiles to tableswitch. */
 internal const val ALU_ADD = 0
 internal const val ALU_SUB = 1
@@ -609,15 +617,22 @@ internal open class Emulator8086(
         if (dest < 0 || dest >= RAM_SIZE) return
         if (src < 0 || src >= RAM_SIZE) return
         if (pendingException >= 0) return
-        
-        val destVal = readOperand(dest)
+
+        // MOV is write-only on real silicon. Reading dest first would reload VGA
+        // latches from the destination and break write-mode-1 copies
+        // (e.g. mov al,[si] / mov [di],al → identity blit).
+        val destVal = if (op == ALU_MOV) {
+            0
+        } else {
+            readOperand(dest)
+        }
         if (pendingException >= 0) return
         val srcVal = readOperand(src)
         if (pendingException >= 0) return
-        
+
         opDest = destVal
         opSource = srcVal
-        
+
         val result = when (op) {
             ALU_ADD -> destVal + srcVal
             ALU_SUB -> destVal - srcVal
@@ -628,7 +643,7 @@ internal open class Emulator8086(
             ALU_MOV -> srcVal
             else -> destVal
         }
-        
+
         opResult = result
 
         if (!writeBack) return

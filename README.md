@@ -80,8 +80,9 @@ Shipped assets are enough for a cold clone (no parent rmDOS tree required):
 ./gradlew :k8086-emulator:run --args='disks/fd.img --headless --serial-log /tmp/com1.log --quiet'
 ```
 
-CLI flags: `--headless` (no CGA window, full-speed), `--serial-log PATH` (COM1 TX
-capture), `--quiet` (suppress usage banner). Guest write of ASCII `Shutdown` to
+CLI flags: `--headless` (no display window, full-speed), `--cpu 8088|8086|80286`,
+`--no-cga` / `--initial-video special` (pair with `cards/vga`), `--serial-log PATH`
+(COM1 TX capture), `--quiet` (suppress usage banner). Guest write of ASCII `Shutdown` to
 port `0x8900` stops the run loop and exits 0.
 
 The wizard configures **motherboard options** (RAM size, software 8087, SW1 video),
