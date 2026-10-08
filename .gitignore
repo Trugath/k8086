@@ -56,6 +56,9 @@ web-demo/node_modules/
 web-demo/dist/
 web-demo/public/
 
+# Editor / merge leftovers
+*.orig
+
 # Manual capture dumps (keep out of git)
 /*.png
 /*.ksnap

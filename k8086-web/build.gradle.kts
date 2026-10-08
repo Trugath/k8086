@@ -34,15 +34,23 @@ val demoDir = rootProject.layout.projectDirectory.dir("web-demo")
 val demoPublic = demoDir.dir("public")
 val webpackDir = layout.buildDirectory.dir("kotlin-webpack/wasmJs/productionExecutable")
 
+val cleanWebDemoPublic by tasks.registering(Delete::class) {
+    group = "distribution"
+    description = "Remove staged Wasm/assets so stale hashed files cannot linger"
+    delete(demoPublic)
+}
+
 val stageWebDemoWasm by tasks.registering(Copy::class) {
     group = "distribution"
-    dependsOn("wasmJsBrowserProductionWebpack")
+    dependsOn("wasmJsBrowserProductionWebpack", cleanWebDemoPublic)
     from(webpackDir)
     into(demoPublic)
 }
 
 val stageWebDemoAssets by tasks.registering(Copy::class) {
     group = "distribution"
+    // After Wasm staging so parallel clean/copy cannot wipe each other.
+    dependsOn(stageWebDemoWasm)
     from(rootProject.file("roms/u18.bin"))
     from(rootProject.file("roms/u19.bin"))
     from(rootProject.file("disks/fd.img"))
@@ -64,8 +72,10 @@ val viteBuildWebDemo by tasks.registering(Exec::class) {
     workingDir = demoDir.asFile
     commandLine(npmCommand("run", "build"))
     inputs.dir(demoDir.dir("src"))
+    inputs.dir(demoPublic)
     inputs.file(demoDir.file("index.html"))
     inputs.file(demoDir.file("vite.config.ts"))
+    inputs.file(demoDir.file("package-lock.json"))
     outputs.dir(demoDir.dir("dist"))
 }
 
