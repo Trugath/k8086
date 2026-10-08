@@ -1,7 +1,22 @@
 # Getting started with k8086
 
-Boot an IBM 5155 / XT-class VM in a few minutes using the workstation UI and the
-shipped rmDOS ROMs + floppy.
+Boot an IBM 5155 / XT-class machine using the shipped rmDOS ROMs + floppy.
+
+## Try in the browser
+
+Build a local page that runs the 8088, CGA, and keyboard in your tab
+(Kotlin/Wasm). Click the screen, then type. Needs a recent Chrome, Firefox, or
+Safari with WasmGC.
+
+```bash
+./gradlew :k8086-web:assembleWebDemo
+python -m http.server 4173 --directory web-demo/dist
+```
+
+Then visit `http://127.0.0.1:4173/`.
+
+The JVM workstation below adds the multi-VM manager, ISA JAR cards, and host
+networking. The browser demo does not.
 
 ## Prerequisites
 

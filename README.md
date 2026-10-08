@@ -37,6 +37,29 @@ The zip includes jars, default rmDOS ROMs (`roms/`), and boot floppy
 push a tag such as `v0.8.0` (CI builds the zip, smokes a headless boot, and
 attaches it to the release).
 
+## In-browser demo
+
+Build a static page that boots shipped rmDOS in the tab (Kotlin/Wasm core + a
+canvas UI). No host JVM.
+
+```bash
+./gradlew :k8086-web:assembleWebDemo
+python -m http.server 4173 --directory web-demo/dist
+# open http://127.0.0.1:4173/
+```
+
+Or after staging Wasm/ROMs into `web-demo/public/`, iterate with Vite:
+
+```bash
+./gradlew :k8086-web:wasmJsBrowserProductionWebpack
+# copy step is included in assembleWebDemo; for a full rebuild use that task
+cd web-demo && npm ci && npm run dev
+```
+
+Requires a browser with [WasmGC](https://kotl.in/wasm-help) (current Chrome,
+Firefox, Safari). ISA JAR cards, NE2000 NAT, and the multi-VM manager stay on
+the JVM workstation.
+
 ## Clone
 
 ```bash
@@ -80,8 +103,8 @@ Shipped assets are enough for a cold clone (no parent rmDOS tree required):
 ./gradlew :k8086-emulator:run --args='disks/fd.img --headless --serial-log /tmp/com1.log --quiet'
 ```
 
-CLI flags: `--headless` (no display window, full-speed), `--cpu 8088|8086|80286`,
-`--mhz N` (guest clock; defaults per CPU; also `--cpu 80286@10`),
+CLI flags: `--headless` (no display window, full-speed), `--cpu 8088|8086|80286|80386`,
+`--mhz N` (guest clock; defaults per CPU; also `--cpu 80286@10` / `--cpu 80386@25`),
 `--no-cga` / `--initial-video special` (pair with `cards/vga`), `--serial-log PATH`
 (COM1 TX capture), `--quiet` (suppress usage banner). Guest write of ASCII `Shutdown` to
 port `0x8900` stops the run loop and exits 0.
@@ -130,7 +153,8 @@ when creating/editing a VM in the workstation.
 | [`k8086-host`](k8086-host/) | Multi-VM host (`LocalHost`) |
 | [`k8086-net`](k8086-net/) | Virtual NAT networks + DHCP gateway |
 | [`k8086-protocol`](k8086-protocol/) | `HostApi` + VM DTOs |
-| [`k8086-emulator`](k8086-emulator/) | CPU, machine, CLI / wizard |
+| [`k8086-emulator`](k8086-emulator/) | CPU, machine, CLI / wizard (JVM + Wasm) |
+| [`k8086-web`](k8086-web/) | Wasm façade for the in-browser demo |
 | [`k8086-api`](k8086-api/) | Public SPI for ISA card plugins |
 | [`cards/*`](cards/README.md) | Example ISA cards |
 
@@ -174,8 +198,8 @@ git -C testdata/8088 sparse-checkout set v2
 ```
 
 The machine defaults to an **8088** (IBM 5155/5160). The start wizard and VM
-motherboard options can select **8086** or real-mode **80286** instead; all share
-one instruction engine (`CpuModel`).
+motherboard options can select **8086**, real-mode **80286**, or real-mode **80386**
+instead; all share one instruction engine (`CpuModel`).
 
 **Acceptance gates** (all runnable opcodes, 2000 vectors each): must exit 0.
 

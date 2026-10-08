@@ -105,6 +105,26 @@ class SetupMapperTest {
     }
 
     @Test
+    fun roundTrips80386CpuWireName() {
+        val setup = MachineSetup(
+            motherboard = MotherboardConfig(cpu = CpuModel.I80386),
+            graphics = GraphicsAdapter.CGA,
+            showVideo = false,
+        )
+        val def = SetupMapper.fromMachineSetup(
+            setup,
+            "386",
+            "u18.bin",
+            "u19.bin",
+            VmId(UUID.randomUUID().toString()),
+        )
+        assertEquals("80386", def.motherboard.cpu)
+        assertEquals(16.0, def.motherboard.cpuMhz)
+        assertEquals(CpuModel.I80386, SetupMapper.toMachineSetup(def).motherboard.cpu)
+        assertEquals(CpuModel.I80386, CpuModel.fromWire("386"))
+    }
+
+    @Test
     fun roundTripsCpuMhz() {
         val setup = MachineSetup(
             motherboard = MotherboardConfig(cpu = CpuModel.I80286, cpuMhz = 10.0),

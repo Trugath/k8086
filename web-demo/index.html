@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>k8086 — in-browser IBM PC/XT demo</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="stage">
+      <header class="mast">
+        <p class="brand">k8086</p>
+        <h1>IBM 5155-class 8088, in this tab.</h1>
+        <p class="lede">
+          Kotlin/Wasm runs rmDOS from shipped U18/U19 ROMs and a 720&nbsp;KB floppy.
+          Click the screen, then type.
+        </p>
+      </header>
+      <div class="crt" id="crt">
+        <canvas id="screen" width="640" height="200" aria-label="CGA display" tabindex="0"></canvas>
+      </div>
+      <p class="status" id="status">Loading emulator…</p>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

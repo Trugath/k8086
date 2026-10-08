@@ -1,6 +1,5 @@
 plugins {
-    kotlin("jvm")
-    application
+    kotlin("multiplatform")
     jacoco
 }
 
@@ -10,41 +9,72 @@ repositories {
     mavenCentral()
 }
 
-dependencies {
-    implementation(project(":k8086-api"))
-    implementation(project(":k8086-protocol"))
-    implementation(project(":k8086-net"))
-    testImplementation(kotlin("test"))
-    testImplementation("com.fasterxml.jackson.core:jackson-databind:2.22.1")
-    // Example cards on the test classpath for direct factory / attach tests.
-    testImplementation(project(":cards:sample-rom"))
-    testImplementation(project(":cards:ram-umb"))
-    testImplementation(project(":cards:adlib"))
-    testImplementation(project(":cards:heartbeat"))
-    testImplementation(project(":cards:ems-window"))
-    testImplementation(project(":cards:de220"))
-    testImplementation(project(":cards:mem-expansion"))
-    testImplementation(project(":cards:uart-8250"))
-    testImplementation(project(":cards:rtc-mm58167"))
-    testImplementation(project(":cards:lpt"))
-    testImplementation(project(":cards:gameport"))
+kotlin {
+    @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
+    wasmJs {
+        browser()
+    }
+    jvm {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        }
+    }
+    jvmToolchain(21)
+
+    sourceSets {
+        commonMain.dependencies {
+            implementation(project(":k8086-api"))
+            implementation(project(":k8086-protocol"))
+        }
+        jvmMain.dependencies {
+            implementation(project(":k8086-net"))
+        }
+        jvmTest.dependencies {
+            implementation(kotlin("test"))
+            implementation("org.junit.jupiter:junit-jupiter:5.11.4")
+            implementation("com.fasterxml.jackson.core:jackson-databind:2.22.1")
+            implementation(project(":cards:sample-rom"))
+            implementation(project(":cards:ram-umb"))
+            implementation(project(":cards:adlib"))
+            implementation(project(":cards:heartbeat"))
+            implementation(project(":cards:ems-window"))
+            implementation(project(":cards:de220"))
+            implementation(project(":cards:mem-expansion"))
+            implementation(project(":cards:uart-8250"))
+            implementation(project(":cards:rtc-mm58167"))
+            implementation(project(":cards:lpt"))
+            implementation(project(":cards:gameport"))
+        }
+    }
 }
 
-tasks.test {
+tasks.register<JavaExec>("run") {
+    group = "application"
+    description = "Runs the single-instance emulator CLI"
+    mainClass.set("com.trugath.k8086.MainKt")
+    workingDir = rootProject.projectDir
+    val compilation = kotlin.jvm().compilations.getByName("main")
+    classpath = compilation.output.allOutputs + compilation.runtimeDependencyFiles
+}
+
+tasks.named<Test>("jvmTest") {
     useJUnitPlatform {
-        // Opt-in suites run via dedicated tasks.
         excludeTags("single-step-8086", "single-step-8088", "single-step-80286", "cpu-performance")
     }
-    // ROM/disk fixtures live at the repo root.
     workingDir = rootProject.projectDir
-    finalizedBy(tasks.jacocoTestReport)
+    testLogging {
+        events("passed", "skipped", "failed")
+        showStandardStreams = false
+    }
+    finalizedBy("jacocoTestReport")
 }
 
 fun org.gradle.api.tasks.testing.Test.configureSingleStepSuite(tag: String, descriptionText: String) {
     description = descriptionText
     group = "verification"
-    testClassesDirs = sourceSets.test.get().output.classesDirs
-    classpath = sourceSets.test.get().runtimeClasspath
+    val compilation = kotlin.jvm().compilations.getByName("test")
+    testClassesDirs = compilation.output.classesDirs
+    classpath = compilation.output.allOutputs + compilation.runtimeDependencyFiles
     useJUnitPlatform {
         includeTags(tag)
     }
@@ -89,21 +119,20 @@ val singleStep80286Test by tasks.registering(Test::class) {
 val cpuPerformanceTest by tasks.registering(Test::class) {
     description = "Runs opt-in CPU hot-path throughput/allocation baseline."
     group = "verification"
-    testClassesDirs = sourceSets.test.get().output.classesDirs
-    classpath = sourceSets.test.get().runtimeClasspath
+    val compilation = kotlin.jvm().compilations.getByName("test")
+    testClassesDirs = compilation.output.classesDirs
+    classpath = compilation.output.allOutputs + compilation.runtimeDependencyFiles
     useJUnitPlatform {
         includeTags("cpu-performance")
     }
     workingDir = rootProject.projectDir
     systemProperty("k8086.cpuPerf.enabled", "true")
-    // Match typical desktop settings so baseline comparisons stay meaningful.
     jvmArgs("-Xms256m", "-Xmx512m")
     maxHeapSize = "512m"
 }
 
-tasks.jacocoTestReport {
-    dependsOn(tasks.test)
-    // Include API + example cards exercised via testImplementation.
+tasks.register<JacocoReport>("jacocoTestReport") {
+    dependsOn(tasks.named("jvmTest"))
     val extraProjects = listOf(
         ":k8086-api",
         ":cards:sample-rom",
@@ -120,17 +149,34 @@ tasks.jacocoTestReport {
     )
     classDirectories.setFrom(
         files(
-            sourceSets.main.get().output,
-            *extraProjects.map { project(it).extensions.getByType(SourceSetContainer::class.java).getByName("main").output }.toTypedArray(),
+            kotlin.jvm().compilations.getByName("main").output.allOutputs,
+            *extraProjects.map {
+                val proj = project(it)
+                val kotlinExt = proj.extensions.findByType(org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension::class.java)
+                if (kotlinExt != null) {
+                    kotlinExt.target.compilations.getByName("main").output.allOutputs
+                } else {
+                    proj.extensions.getByType(org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension::class.java)
+                        .jvm().compilations.getByName("main").output.allOutputs
+                }
+            }.toTypedArray(),
         ).asFileTree.matching {
             exclude("**/META-INF/**")
         },
     )
     additionalSourceDirs.setFrom(
         files(
-            sourceSets.main.get().allSource.srcDirs,
-            *extraProjects.map {
-                project(it).extensions.getByType(SourceSetContainer::class.java).getByName("main").allSource.srcDirs
+            kotlin.sourceSets.getByName("commonMain").kotlin.srcDirs,
+            kotlin.sourceSets.getByName("jvmMain").kotlin.srcDirs,
+            *extraProjects.map { projPath ->
+                val proj = project(projPath)
+                val jvmExt = proj.extensions.findByType(org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension::class.java)
+                if (jvmExt != null) {
+                    jvmExt.sourceSets.getByName("main").kotlin.srcDirs
+                } else {
+                    proj.extensions.getByType(org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension::class.java)
+                        .sourceSets.getByName("commonMain").kotlin.srcDirs
+                }
             }.toTypedArray(),
         ),
     )
@@ -141,10 +187,7 @@ tasks.jacocoTestReport {
     }
 }
 
-kotlin {
-    jvmToolchain(21)
-}
-
-application {
-    mainClass.set("com.trugath.k8086.MainKt")
+tasks.register("test") {
+    dependsOn("jvmTest")
+    group = "verification"
 }

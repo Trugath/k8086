@@ -1,5 +1,5 @@
 plugins {
-    kotlin("jvm")
+    kotlin("multiplatform")
 }
 
 group = "com.trugath.k8086"
@@ -9,5 +9,14 @@ repositories {
 }
 
 kotlin {
+    jvm {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        }
+    }
+    @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
+    wasmJs {
+        browser()
+    }
     jvmToolchain(21)
 }

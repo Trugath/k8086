@@ -51,6 +51,11 @@ local.properties
 !disks/fd.img
 **/hd.img
 
+# Browser demo build
+web-demo/node_modules/
+web-demo/dist/
+web-demo/public/
+
 # Manual capture dumps (keep out of git)
 /*.png
 /*.ksnap

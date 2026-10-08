@@ -60,7 +60,7 @@ copies under `~/.k8086/vms/<id>/roms/` are immutable snapshots for that VM.
 
 ### System
 
-CPU model (8088 / 8086 / real-mode 80286), clock speed presets (XT 4.77 MHz;
+CPU model (8088 / 8086 / real-mode 80286 / real-mode 80386), clock speed presets (XT 4.77 MHz;
 286 grades 6 / 8 / 10 / 12.5), conventional memory (64–640 KB), optional
 software 8087, SW1 initial video mode, and optional continuous POST loop.
 

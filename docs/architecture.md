@@ -15,6 +15,7 @@ flowchart TB
   protocol[k8086-protocol]
   emulator[k8086-emulator]
   api[k8086-api]
+  web[k8086-web]
   cards[cards]
 
   app --> client
@@ -32,6 +33,7 @@ flowchart TB
   net --> protocol
   cards --> api
   emulator -->|"IsaSlotLoader JARs"| cards
+  web --> emulator
 ```
 
 | Module | Role |
@@ -41,7 +43,8 @@ flowchart TB
 | **`k8086-host`** | VM registry, persistence (`~/.k8086/vms/`), per-VM worker threads |
 | **`k8086-net`** | Virtual NAT networks, DHCP, userspace gateway (`~/.k8086/networks/`) |
 | **`k8086-protocol`** | Wire-ready DTOs + `HostApi` / `NetworkApi` |
-| **`k8086-emulator`** | CPU, machine, XT peripherals, single-instance CLI / wizard |
+| **`k8086-emulator`** | CPU, machine, XT peripherals, single-instance CLI / wizard (JVM + Wasm) |
+| **`k8086-web`** | Kotlin/Wasm façade + static browser demo (`web-demo/`) |
 | **`k8086-api`** | Stable SPI for ISA card plugins |
 | **`cards/*`** | Example ISA JARs (ServiceLoader) |
 
@@ -49,7 +52,7 @@ flowchart TB
 
 | Package | Contents |
 |---------|----------|
-| `cpu/` | `Emulator8088` / `8086` / `80286`, decode & cycle tables, 8087 glue |
+| `cpu/` | `Emulator8088` / `8086` / `80286` / `80386`, decode & cycle tables, 8087 glue |
 | `cpu/fpu/` | Software 8087: `Ext80`, ESC decode, formats, transcendentals |
 | `bus/` | `MemoryBus`, `IoBus` |
 | `chipset/` | PIC, PIT, PPI, DMA, keyboard, speaker, UART (COM1), shutdown port |
@@ -107,17 +110,20 @@ Mnemonic disassembly is not implemented (decode tables expose lengths, not names
 6. Optional ISA JAR cards attach via `loadCards` before `prepareBoot` so option
    ROMs are visible during POST.
 7. Single-instance: `./gradlew :k8086-emulator:run`. Workstation: `./gradlew :k8086-app:run`.
+   In-browser demo: `k8086-web` + `web-demo/` (`Machine.runSlice` from `requestAnimationFrame`).
 
 ROM layout and overrides: [roms/README.md](../roms/README.md).
 Disk images: [disks/README.md](../disks/README.md).
 
 ## CPU
 
-`CpuModel` selects **8088** (XT default), **8086**, or real-mode **80286**. All
-share one open instruction engine; peripherals take the base `Emulator8086` type.
-Motherboard choice is persisted as `mb.cpu`. The 286 option implements 80186
-opcodes and real-mode `0x0F` (SMSW/LMSW/CLTS); protected mode and AT chipset are
-out of scope.
+`CpuModel` selects **8088** (XT default), **8086**, real-mode **80286**, or
+real-mode **80386**. All share one open instruction engine; peripherals take the
+base `Emulator8086` type. Motherboard choice is persisted as `mb.cpu`. The 286
+option implements 80186 opcodes and real-mode `0x0F` (SMSW/LMSW/CLTS). The 386
+option adds 32-bit GPRs, FS/GS, 66h/67h size prefixes, CR0, and the real-mode
+`0x0F` application set (MOVZX/SETcc/Jcc near/bit ops/…). Protected mode, paging,
+V86, and AT chipset are out of scope.
 
 Architectural correctness is gated by optional SingleStepTests corpora:
 
