@@ -9,7 +9,8 @@ import com.trugath.k8086.api.MemoryRegion
  * Minimal [IsaHost] for VGA card unit tests: backs BDA/conventional RAM,
  * records IO/MMIO/ROM maps, and runs tickables.
  */
-class FakeIsaHost : IsaHost {
+class FakeIsaHost(private val hz: Double = 4_772_727.0) : IsaHost {
+    override fun realtimeCpuHz(): Double = hz
     val cpuMem = ByteArray(0x100000)
     val ioDevices = mutableMapOf<Int, IoDevice>()
     val memoryRegions = mutableListOf<MemoryRegion>()

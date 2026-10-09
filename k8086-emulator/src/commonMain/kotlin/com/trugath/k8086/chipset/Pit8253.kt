@@ -11,7 +11,10 @@ import com.trugath.k8086.compat.JvmField
 //
 // This models counter reloads, the low/high byte read-write sequencing, latching,
 // and countdown, and raises IRQ0 on the PIC each time counter 0 completes a period.
-class Pit8253(private val pic: Pic8259) : IoDevice {
+class Pit8253(
+    private val pic: Pic8259,
+    cpuHz: Double = 4_772_727.0,
+) : IoDevice {
 
     private class Counter {
         @JvmField var reload = 0          // full reload value (0 means 65536)
@@ -45,8 +48,9 @@ class Pit8253(private val pic: Pic8259) : IoDevice {
     internal var refreshDma: Dma8237? = null
     var refreshRequest: (() -> Unit)? = null
 
-    // Fractional PIT-clock accumulator: the CPU runs at exactly 4x the PIT input clock.
-    private var clockAccumCpuCycles = 0
+    // PIT input frequency is independent of the configured CPU clock.
+    private val pitTicksPerCpuCycle = (4_772_727.0 / 4.0) / cpuHz
+    private var clockAccumPitTicks = 0.0
     private var refreshPending = false
 
     override fun ioReadByte(port: Int): Int {
@@ -119,11 +123,11 @@ class Pit8253(private val pic: Pic8259) : IoDevice {
     // Advance all counters by the given number of CPU cycles. IRQ0 is raised each
     // time counter 0 elapses a full period.
     fun tickCpuCycles(cpuCycles: Int) {
-        // Exact integer divide: 4.77 MHz / 1.19318 MHz = 4.
-        clockAccumCpuCycles += cpuCycles
-        val ticks = clockAccumCpuCycles shr 2
+        if (cpuCycles <= 0) return
+        clockAccumPitTicks += cpuCycles * pitTicksPerCpuCycle
+        val ticks = clockAccumPitTicks.toInt()
         if (ticks <= 0) return
-        clockAccumCpuCycles -= ticks shl 2
+        clockAccumPitTicks -= ticks
         advance(ticks)
     }
 

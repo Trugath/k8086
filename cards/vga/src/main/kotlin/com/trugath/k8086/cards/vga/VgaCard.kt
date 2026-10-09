@@ -78,9 +78,15 @@ class VgaCard(
     private var window: VgaWindow? = null
     private var ttyAttr = 0x07
     private var dirtyAccum = 0
+    private var rasterTickFraction = 0.0
+    private var rasterTicksPerCpuCycle = 1.0
 
     override fun attach(host: IsaHost) {
         this.host = host
+        val cpuHz = host.realtimeCpuHz().takeIf { it.isFinite() && it > 0.0 } ?: 4_772_727.0
+        // The core raster uses 800 dot clocks per line, not CPU clocks.
+        rasterTicksPerCpuCycle = 25_175_000.0 / cpuHz
+        rasterTickFraction = 0.0
         require(romBase and 0x7FF == 0) { "VGA ROM base must be 2K-aligned" }
 
         core.setMode03h()
@@ -134,7 +140,10 @@ class VgaCard(
         host.mapIo(io, VgaBiosRom.SOFT_ATTR_PORT..VgaBiosRom.SOFT_TTY_PORT)
 
         host.addTickable { cycles ->
-            core.tickCpuCycles(cycles)
+            rasterTickFraction += cycles * rasterTicksPerCpuCycle
+            val rasterTicks = rasterTickFraction.toInt()
+            rasterTickFraction -= rasterTicks
+            core.tickCpuCycles(rasterTicks)
             // Keep BDA 40:49 aligned when games reprogram CRTC after INT10 mode set
             // (or when something clobbers low memory after we wrote the mode).
             // Keep BDA 40:49 aligned with the adapter after INT10 / low-memory clobber.

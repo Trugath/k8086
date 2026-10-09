@@ -182,7 +182,7 @@ class Machine(
     val ioBus = IoBus()
 
     val pic = Pic8259()
-    val pit = Pit8253(pic)
+    val pit = Pit8253(pic, options.realtimeCpuHz)
     val ppi = Ppi8255(pit, pic)
     internal val dma = Dma8237(cpu)
 

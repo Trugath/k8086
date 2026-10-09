@@ -115,12 +115,34 @@ class VgaCardTest {
         host.ioWrite(VgaBiosRom.SOFT_MODE_PORT, 0x13)
         val before = card.core.frameCycle
         host.tick(1_000)
-        assertEquals(before + 1_000, card.core.frameCycle)
+        assertEquals(before + (1_000 * 25_175_000.0 / host.realtimeCpuHz()).toLong(), card.core.frameCycle)
 
         host.cpuWrite8(0x449, 0x00) // clobber BDA mode
         host.tick(10)
         assertEquals(0x13, host.cpuRead8(0x449))
         assertEquals(40, host.cpuRead8(0x44A))
+    }
+
+    @Test
+    fun rasterClockIsIndependentOfCpuFrequency() {
+        for (hz in listOf(4_772_727.0, 8_000_000.0, 16_000_000.0, 33_000_000.0)) {
+            val host = FakeIsaHost(hz)
+            val card = VgaCard(0xC0000, false, false)
+            card.attach(host)
+            var remaining = hz.toInt()
+            var frames = 0
+            while (remaining > 0) {
+                val before = card.core.frameCycle
+                val step = minOf(remaining, 1000)
+                host.tick(step)
+                if (card.core.frameCycle < before) frames++
+                remaining -= step
+            }
+            assertEquals(70, frames, "CPU clock $hz")
+            val expectedPhase = 25_175_000L % VgaCore.CYCLES_PER_FRAME
+            assertTrue(kotlin.math.abs(card.core.frameCycle - expectedPhase) <= 1)
+            card.detach()
+        }
     }
 
     @Test

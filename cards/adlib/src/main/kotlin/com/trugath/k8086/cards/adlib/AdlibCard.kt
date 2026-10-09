@@ -71,6 +71,10 @@ class AdlibCard(
     private var timer1 = 0
     private var timer2 = 0
     private var timerCtrl = 0
+    private var timer1CycleAccum = 0.0
+    private var timer2CycleAccum = 0.0
+    private var timer1PeriodCycles = CPU_HZ_DEFAULT * 80e-6
+    private var timer2PeriodCycles = CPU_HZ_DEFAULT * 320e-6
 
     private val line: SourceDataLine? = if (enableAudio) openLine() else null
     private var sampleAccum = 0.0
@@ -84,6 +88,9 @@ class AdlibCard(
 
     override fun attach(host: IsaHost) {
         attachedHost = host
+        val cpuHz = host.realtimeCpuHz().takeIf { it.isFinite() && it > 0.0 } ?: CPU_HZ_DEFAULT
+        timer1PeriodCycles = cpuHz * 80e-6
+        timer2PeriodCycles = cpuHz * 320e-6
         val device = object : IoDevice {
             override fun ioReadByte(port: Int): Int = when (port - portBase) {
                 0 -> status and 0xFF
@@ -120,6 +127,8 @@ class AdlibCard(
             0x02 -> timer1 = value
             0x03 -> timer2 = value
             0x04 -> {
+                if (((timerCtrl xor value) and 0x01) != 0) timer1CycleAccum = 0.0
+                if (((timerCtrl xor value) and 0x02) != 0) timer2CycleAccum = 0.0
                 timerCtrl = value
                 if ((value and 0x80) != 0) status = status and 0x1F
             }
@@ -129,16 +138,20 @@ class AdlibCard(
         if (index in 0x02..0x04) opl.regs[index] = value and 0xFF
     }
 
-    private var cycleAccum = 0
     private fun tickTimers(cpuCycles: Int) {
-        cycleAccum += cpuCycles
-        while (cycleAccum >= 80) {
-            cycleAccum -= 80
-            if ((timerCtrl and 0x01) != 0 && (timerCtrl and 0x40) == 0) {
+        if (cpuCycles <= 0) return
+        if ((timerCtrl and 0x01) != 0 && (timerCtrl and 0x40) == 0) {
+            timer1CycleAccum += cpuCycles
+            while (timer1CycleAccum >= timer1PeriodCycles) {
+                timer1CycleAccum -= timer1PeriodCycles
                 timer1 = (timer1 + 1) and 0xFF
                 if (timer1 == 0) status = status or 0xC0
             }
-            if ((timerCtrl and 0x02) != 0 && (timerCtrl and 0x20) == 0) {
+        }
+        if ((timerCtrl and 0x02) != 0 && (timerCtrl and 0x20) == 0) {
+            timer2CycleAccum += cpuCycles
+            while (timer2CycleAccum >= timer2PeriodCycles) {
+                timer2CycleAccum -= timer2PeriodCycles
                 timer2 = (timer2 + 1) and 0xFF
                 if (timer2 == 0) status = status or 0xA0
             }
