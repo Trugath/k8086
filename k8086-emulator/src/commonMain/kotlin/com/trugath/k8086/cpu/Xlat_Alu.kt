@@ -9,10 +9,55 @@ package com.trugath.k8086.cpu
 internal fun Emulator8086.executeOpcode8Body() {
     opToAddr = rmAddr
     iD = iD or (!iW)
-    val scratchValue = if (iD) iData2.toByte().toInt() else iData2
-    regs16[REG_SCRATCH] = scratchValue.toShort()
-    opFromAddr = REGS_BASE + 2 * REG_SCRATCH
-    regIp += (if (!iD) 1 else 0) + 1
+    // Imm8 (sign-extended) vs imm16/imm32. With 66h, opcode 81 takes a 32-bit immediate;
+    // IP must skip all four bytes here because setOpcode() remaps to a non-imm form whose
+    // post-exec length no longer includes the immediate (under-skip → FE2 MCGA desync).
+    val immBytes = when {
+        iD -> 1
+        operandSize32() -> 4
+        else -> 2
+    }
+    val dispBytes = if (iModSize > 0 && iMod < 3) {
+        if (addressSizeOverrideEn != 0) {
+            modRm32ExtraBytes()
+        } else {
+            (iMod * (if (iMod != 3) 1 else 0) +
+                2 * (if (iMod == 0 && iRm == 6) 1 else 0)) * iModSize
+        }
+    } else {
+        0
+    }
+    val scratchValue = if (iD) {
+        instructionRead8((regIp + 2 + dispBytes) and 0xFFFF).toByte().toInt()
+    } else if (immBytes == 4) {
+        // Imm32 starts after opcode+modrm+disp; iData2 alone is only correct when
+        // dispBytes==0 (reg form / no disp). With [disp16] it holds the low imm
+        // word only if decoder rebound it — always re-read from CS:IP.
+        val immOff = 2 + dispBytes
+        val b0 = instructionRead8((regIp + immOff) and 0xFFFF)
+        val b1 = instructionRead8((regIp + immOff + 1) and 0xFFFF)
+        val b2 = instructionRead8((regIp + immOff + 2) and 0xFFFF)
+        val b3 = instructionRead8((regIp + immOff + 3) and 0xFFFF)
+        b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+    } else if (addressSizeOverrideEn != 0) {
+        val immOff = 2 + dispBytes
+        instructionRead8((regIp + immOff) and 0xFFFF) or
+            (instructionRead8((regIp + immOff + 1) and 0xFFFF) shl 8)
+    } else {
+        iData2
+    }
+    // SCRATCH is outside EAX..EDI. For imm32, keep the high half in imm32Scratch
+    // — REG_FS is the next 16-bit slot after REG_SCRATCH, so a linear dword write
+    // would clobber FS (SingleStep 66 05 / 81 vectors).
+    val scratchAddr = REGS_BASE + 2 * REG_SCRATCH
+    guestWrite16(scratchAddr, scratchValue)
+    // 66h: dword ops must see the full 32-bit immediate (imm8 sign-extended
+    // or imm32). Without imm32Scratch, readOperand only gets 16 bits (6683.MOO).
+    if (operandSize32()) {
+        imm32Scratch = scratchValue
+    }
+    opFromAddr = scratchAddr
+    regIp += immBytes
     extra = iReg
     setOpcode(0x08 * extra) // Decode like the reg,r/m variant of the same operation
 }
@@ -23,9 +68,9 @@ internal fun Emulator8086.executeOpcode9Body() {
         0 -> { // ADD
             memOp(opToAddr, ALU_ADD, opFromAddr)
             // Carry mirrors the C reference's unsigned `op_result < op_dest`, where
-            // op_result is truncated to the operand width. Kotlin's opResult is the
-            // untruncated sum, so mask it before the (now signed-safe) comparison.
-            setCF((opResult and cfWidthMask()) < opDest)
+            // op_result is truncated to the operand width. Kotlin Int `<` is signed,
+            // so compare via Long for 32-bit opsize.
+            setCF(unsignedLess(opResult and cfWidthMask(), opDest and cfWidthMask()))
         }
         1 -> { // OR
             memOp(opToAddr, ALU_OR, opFromAddr)
@@ -38,8 +83,10 @@ internal fun Emulator8086.executeOpcode9Body() {
             // Carry out on unsigned overflow. Truncating opResult to the operand width,
             // the sum carries when it wraps below the destination; the carry-in edge
             // (dest + 0xFFFF.. + 1 wraps back to dest) is caught by the equality term.
-            val masked = opResult and cfWidthMask()
-            setCF(masked < opDest || (cf != 0 && masked == opDest))
+            val mask = cfWidthMask()
+            val masked = opResult and mask
+            val dest = opDest and mask
+            setCF(unsignedLess(masked, dest) || (cf != 0 && masked == dest))
             setAFOfArith()
         }
         3 -> { // SBB
@@ -49,8 +96,10 @@ internal fun Emulator8086.executeOpcode9Body() {
             writeOperand(opToAddr, opResult)
             // Borrow (unsigned) when the truncated difference exceeds the minuend; the
             // carry-in edge (subtrahend + borrow wraps to 0) is caught by the equality.
-            val masked = opResult and cfWidthMask()
-            setCF(masked > opDest || (cf != 0 && masked == opDest))
+            val mask = cfWidthMask()
+            val masked = opResult and mask
+            val dest = opDest and mask
+            setCF(unsignedGreater(masked, dest) || (cf != 0 && masked == dest))
             setAFOfArith()
         }
         4 -> { // AND
@@ -58,7 +107,7 @@ internal fun Emulator8086.executeOpcode9Body() {
         }
         5 -> { // SUB
             memOp(opToAddr, ALU_SUB, opFromAddr)
-            setCF((opResult and cfWidthMask()) > opDest)
+            setCF(unsignedGreater(opResult and cfWidthMask(), opDest and cfWidthMask()))
         }
         6 -> { // XOR
             memOp(opToAddr, ALU_XOR, opFromAddr)
@@ -68,7 +117,7 @@ internal fun Emulator8086.executeOpcode9Body() {
             // Borrow (unsigned): the subtrahend exceeds the minuend. Masking the raw
             // difference to the operand width makes 0 - 1 read back as 0xFF/0xFFFF,
             // matching the reference's unsigned comparison against op_dest.
-            setCF((opResult and cfWidthMask()) > opDest)
+            setCF(unsignedGreater(opResult and cfWidthMask(), opDest and cfWidthMask()))
         }
         8 -> { // MOV
             memOp(opToAddr, ALU_MOV, opFromAddr)
@@ -127,22 +176,46 @@ internal fun Emulator8086.executeXlat5() {
         // Sample the branch target before any stack write. CALL SP must
         // jump to the pre-decrement SP; reading after push would use SP-2.
         // Memory targets also need 16-bit offset wrap (e.g. word at FFFFh).
-        val newIp = readOperand(opFromAddr)
-        if (pendingException >= 0) return
-        val newCs = if ((iReg and 1) != 0) {
-            if (rmIsMemory && wordOffsetFaults((rmOffset + 2) and 0xFFFF)) {
-                raiseException(exceptionForWordAccess(rmSegment))
-                return
+        //
+        // Real/VM86 far pointer layout depends on operand size:
+        //   16-bit opsize → 16:16 at [mem+0]/[mem+2]
+        //   32-bit opsize → 16:32 at [mem+0]/[mem+4] (Intel SDM CALL)
+        val far32 = (iReg and 1) != 0 && operandSizeOverrideEn != 0
+        val newIp: Int
+        val newCs: Int?
+        if ((iReg and 1) != 0) {
+            if (far32) {
+                if (rmIsMemory && dwordOffsetFaults(rmOffset and 0xFFFF)) {
+                    raiseException(exceptionForWordAccess(rmSegment))
+                    return
+                }
+                if (rmIsMemory && wordOffsetFaults((rmOffset + 4) and 0xFFFF)) {
+                    raiseException(exceptionForWordAccess(rmSegment))
+                    return
+                }
+                newIp = guestRead8(rmAddress(0)) or (guestRead8(rmAddress(1)) shl 8) or
+                    (guestRead8(rmAddress(2)) shl 16) or (guestRead8(rmAddress(3)) shl 24)
+                newCs = guestRead8(rmAddress(4)) or (guestRead8(rmAddress(5)) shl 8)
+            } else {
+                newIp = readOperand(opFromAddr)
+                if (pendingException >= 0) return
+                if (rmIsMemory && wordOffsetFaults((rmOffset + 2) and 0xFFFF)) {
+                    raiseException(exceptionForWordAccess(rmSegment))
+                    return
+                }
+                newCs = guestRead8(rmAddress(2)) or (guestRead8(rmAddress(3)) shl 8)
             }
-            guestRead8(rmAddress(2)) or (guestRead8(rmAddress(3)) shl 8)
         } else {
-            null
+            newIp = readOperand(opFromAddr)
+            if (pendingException >= 0) return
+            newCs = null
         }
         if (iReg == 3) { // CALL (far)
             push(regs16[REG_CS].toInt() and 0xFFFF)
             if (pendingException >= 0) return
         }
         if ((iReg and 2) != 0) { // CALL (near or far)
+            // Instruction length from FF opcode (66h prefix already consumed).
             val callOffset = 2 + iMod * (if (iMod != 3) 1 else 0) + 2 * (if (iMod == 0 && iRm == 6) 1 else 0)
             push(regIp + callOffset)
             if (pendingException >= 0) return
@@ -150,12 +223,18 @@ internal fun Emulator8086.executeXlat5() {
         if (newCs != null) {
             regs16[REG_CS] = newCs.toShort()
         }
-        regIp = newIp
+        // Real-mode fetch uses the low 16 bits of EIP.
+        regIp = newIp and 0xFFFF
+        flushInstructionPrefetch()
         setOpcode(0x9A) // Decode like CALL
     }
 }
 
 internal fun Emulator8086.executeXlat6() {
+    if (operandSize32()) {
+        executeDwordGroup3()
+        return
+    }
     // TEST r/m,imm16 | NOT|NEG|MUL|IMUL|DIV|IDIV reg - OPCODE 6
     // Nested switch(i_reg) inside OPCODE 6 (ALU /m,imm forms).
     // opToAddr already equals opFromAddr (== rmAddr) here: the top-level
@@ -166,9 +245,15 @@ internal fun Emulator8086.executeXlat6() {
     opToAddr = opFromAddr
     when (iReg) {
         0, 1 -> { // TEST r/m, imm8/imm16 (reg=1 is an 8086 alias of reg=0)
+            val immediate = if (addressSizeOverrideEn != 0) {
+                val immOff = 2 + if (iMod < 3) modRm32ExtraBytes() else 0
+                val lo = instructionRead8((regIp + immOff) and 0xFFFF)
+                if (iW) lo or (instructionRead8((regIp + immOff + 1) and 0xFFFF) shl 8)
+                else lo
+            } else iData2
             setOpcode(0x20) // Decode like AND
             regIp += if (iW) 2 else 1
-            regs16[REG_SCRATCH] = iData2.toShort()
+            regs16[REG_SCRATCH] = immediate.toShort()
             memOp(opToAddr, ALU_AND, REGS_BASE + 2 * REG_SCRATCH, writeBack = false)
         }
         2 -> { // NOT
@@ -281,6 +366,83 @@ internal fun Emulator8086.executeXlat6() {
     }
 }
 
+private fun Emulator8086.executeDwordGroup3() {
+    val value = readOperand(rmAddr)
+    if (pendingException >= 0) return
+    when (iReg) {
+        0, 1 -> {
+            val disp = if (iMod == 3) 0 else if (addressSizeOverrideEn != 0) {
+                modRm32ExtraBytes()
+            } else {
+                if (iMod == 0 && iRm == 6 || iMod == 2) 2 else if (iMod == 1) 1 else 0
+            }
+            val immOff = 2 + disp
+            var immediate = 0
+            repeat(4) { i ->
+                immediate = immediate or (instructionRead8((regIp + immOff + i) and 0xFFFF) shl (8 * i))
+            }
+            opDest = value
+            opSource = immediate
+            opResult = value and immediate
+            regIp += 4
+            setOpcode(0x20)
+        }
+        2 -> {
+            opResult = value.inv()
+            writeOperand(rmAddr, opResult)
+        }
+        3 -> {
+            opDest = 0
+            opSource = value
+            opResult = -value
+            writeOperand(rmAddr, opResult)
+            setOpcode(0x28)
+            setCF(value != 0)
+        }
+        4, 5 -> {
+            val signed = iReg == 5
+            val ax = getReg32(REG_AX)
+            val product = if (signed) ax.toLong() * value.toLong() else
+                (ax.toLong() and 0xFFFFFFFFL) * (value.toLong() and 0xFFFFFFFFL)
+            setReg32(REG_AX, product.toInt())
+            setReg32(REG_DX, (product ushr 32).toInt())
+            val overflow = if (signed) product != product.toInt().toLong() else (product ushr 32) != 0L
+            setCF(overflow)
+            setOF(overflow)
+        }
+        6, 7 -> {
+            if (value == 0) {
+                raiseDivideError()
+                return
+            }
+            val dividend = (getReg32(REG_DX).toLong() shl 32) or (getReg32(REG_AX).toLong() and 0xFFFFFFFFL)
+            if (iReg == 7) {
+                // Long.MIN_VALUE / -1 overflows even the intermediate quotient.
+                if (dividend == Long.MIN_VALUE && value == -1) {
+                    raiseDivideError()
+                    return
+                }
+                val quotient = dividend / value.toLong()
+                if (quotient !in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) {
+                    raiseDivideError()
+                    return
+                }
+                setReg32(REG_AX, quotient.toInt())
+                setReg32(REG_DX, (dividend % value.toLong()).toInt())
+            } else {
+                val divisor = value.toUInt().toULong()
+                val quotient = dividend.toULong() / divisor
+                if (quotient > UInt.MAX_VALUE.toULong()) {
+                    raiseDivideError()
+                    return
+                }
+                setReg32(REG_AX, quotient.toInt())
+                setReg32(REG_DX, (dividend.toULong() % divisor).toInt())
+            }
+        }
+    }
+}
+
 internal fun Emulator8086.executeXlat7() {
     // ADD|OR|ADC|SBB|AND|SUB|XOR|CMP AL/AX, immed - OPCODE 7 (falls through to 8, 9)
     rmAddr = REGS_BASE
@@ -312,11 +474,12 @@ internal fun Emulator8086.executeXlat12() {
     // op_dest to the pre-shift value, for both rotates and shifts alike.
     val originalValue = readOperand(rmAddr)
     val scratchUint = if (extra != 0) { // xxx reg/mem, imm8 (C0/C1)
-        val immOff = 2 + iMod * (if (iMod != 3) 1 else 0) +
-            2 * (if (iMod == 0 && iRm == 6) 1 else 0)
-        val imm = guestRead8(
-            segreg(REG_CS, REG_ZERO, (regIp + immOff) and 0xFFFF),
-        )
+        val immOff = 2 + if (iMod == 3) 0 else if (addressSizeOverrideEn != 0) {
+            modRm32ExtraBytes()
+        } else {
+            iMod * (if (iMod != 3) 1 else 0) + 2 * (if (iMod == 0 && iRm == 6) 1 else 0)
+        }
+        val imm = instructionRead8((regIp + immOff) and 0xFFFF)
         regIp++ // imm8 not included in baseInstSize
         maskShiftCount(imm.toByte().toInt())
     } else if (iD) { // xxx reg/mem, CL
@@ -328,7 +491,7 @@ internal fun Emulator8086.executeXlat12() {
 
     if (scratchUint != 0) {
         val width = topBit()
-        val widthMask = if (iW) 0xFFFF else 0xFF
+        val widthMask = cfWidthMask()
         val signMask = 1 shl (width - 1)
         opDest = originalValue
         var result = originalValue and widthMask

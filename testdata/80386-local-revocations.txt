@@ -1,0 +1,6 @@
+# Local revocations for SingleStepTests/80386 vectors (one SHA-1 hash per line).
+# Prefer upstream revocation_list.txt; add hashes here only for k8086-specific skips.
+
+# 6700 #20: EA offset exceeds real-mode limit (should #GP) but corpus final state
+# shows a successful write — inconsistent capture; skip until upstream revises.
+898259a6c7d2c4bf8a7ad58f8a5b7c7cdd5ea1c3

@@ -132,6 +132,7 @@ Architectural correctness is gated by optional SingleStepTests corpora:
 | 8086 | [SingleStepTests/8086](https://github.com/SingleStepTests/8086) `v1` | `:k8086-emulator:singleStep8086Test` |
 | 8088 | [SingleStepTests/8088](https://github.com/SingleStepTests/8088) `v2` | `:k8086-emulator:singleStep8088Test` |
 | 80286 | [SingleStepTests/80286](https://github.com/SingleStepTests/80286) `v1_real_mode` | `:k8086-emulator:singleStep80286Test` |
+| 80386 | [SingleStepTests/80386](https://github.com/SingleStepTests/80386) `v1_ex_real_mode` | `:k8086-emulator:singleStep80386Test` |
 
 Notable modeled behaviors: PUSH SP post-decrement (808x) vs pre-decrement (286),
 `FF /7` / `F6/F7 /1` aliases, REP/REPNE × MUL via F1, deferred `#DE` IP push on
@@ -139,6 +140,10 @@ Notable modeled behaviors: PUSH SP post-decrement (808x) vs pre-decrement (286),
 
 `Machine` advances peripherals from a coarse per-opcode cycle estimate
 (`lastInstructionCycles`), not a flat constant. This is not 8088-prefetch-accurate.
+The 386 core retains a functional 16-byte instruction prefetch queue: guest stores
+do not change queued instruction bytes, and taken branches, interrupts, reset,
+and debugger IP relocation flush it. Instruction immediates use the same queue;
+data accesses read current memory. Queue refill timing is not cycle-accurate.
 NMI is available via `Emulator8086.requestNmi()` / `IsaHost.requestNmi()` (INT 2).
 
 ## Math coprocessor (8087)

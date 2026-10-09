@@ -6,9 +6,11 @@ import java.nio.ByteOrder
 import java.util.zip.GZIPInputStream
 
 /**
- * Minimal reader for SingleStepTests/80286 `MOO` chunk files (state fields only).
+ * Minimal reader for SingleStepTests `MOO` chunk files (state fields only).
  * Cycle traces are skipped. Format documented at https://github.com/dbalsom/moo
- * and converted by `tools/moo2json.py` in the 80286 corpus.
+ *
+ * Supports 16-bit register chunks ([REGS]) used by 80286 corpora and 32-bit
+ * chunks ([RG32]/REGS]) used by 80386 corpora (cpu id contains `"386"`).
  */
 internal object MooReader {
     data class Vector(
@@ -28,35 +30,59 @@ internal object MooReader {
 
     data class ExceptionInfo(val number: Int, val flagAddress: Int)
 
-    private val REG_ORDER = listOf(
+    data class FileContents(
+        val cpuName: String,
+        val vectors: List<Vector>,
+    )
+
+    private val REG_ORDER_16 = listOf(
         "ax", "bx", "cx", "dx", "cs", "ss", "ds", "es",
         "sp", "bp", "si", "di", "ip", "flags",
     )
 
-    fun readGzip(input: InputStream): List<Vector> =
-        GZIPInputStream(input.buffered()).use { gzip -> read(gzip) }
+    private val REG_ORDER_386 = listOf(
+        "cr0", "cr3", "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp",
+        "cs", "ds", "es", "fs", "gs", "ss", "eip", "eflags", "dr6", "dr7",
+    )
 
-    fun read(input: InputStream): List<Vector> {
+    fun readGzip(input: InputStream): List<Vector> = readGzipFile(input).vectors
+
+    fun readGzipFile(input: InputStream): FileContents =
+        GZIPInputStream(input.buffered()).use { gzip -> readFile(gzip) }
+
+    fun read(input: InputStream): List<Vector> = readFile(input).vectors
+
+    fun readFile(input: InputStream): FileContents {
         val data = input.readBytes()
         val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
         check(readTag(buf) == "MOO ") { "Not a MOO file" }
         val headerLen = buf.int
-        buf.position(buf.position() + headerLen)
+        val headerEnd = buf.position() + headerLen
+        val cpuName = if (headerLen >= 12) {
+            val raw = ByteArray(4)
+            buf.position(buf.position() + 8)
+            buf.get(raw)
+            String(raw, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
+        } else {
+            ""
+        }
+        buf.position(headerEnd)
 
+        val is386 = cpuName.contains("386", ignoreCase = true)
         val tests = mutableListOf<Vector>()
         while (buf.remaining() >= 8) {
             val tag = readTag(buf)
             val length = buf.int
             val end = buf.position() + length
             if (tag == "TEST") {
-                tests += decodeTest(buf.slice().order(ByteOrder.LITTLE_ENDIAN).limit(length))
+                tests += decodeTest(buf.slice().order(ByteOrder.LITTLE_ENDIAN).limit(length), is386)
             }
             buf.position(end)
         }
-        return tests
+        return FileContents(cpuName, tests)
     }
 
-    private fun decodeTest(buf: ByteBuffer): Vector {
+    private fun decodeTest(buf: ByteBuffer, is386: Boolean): Vector {
         val idx = buf.int
         var name = "<unnamed>"
         var bytes = emptyList<Int>()
@@ -81,8 +107,8 @@ internal object MooReader {
                     val count = slice.int
                     bytes = List(count) { slice.get().toInt() and 0xFF }
                 }
-                "INIT" -> initial = decodeCpuState(slice)
-                "FINA" -> final = decodeCpuState(slice)
+                "INIT" -> initial = decodeCpuState(slice, is386)
+                "FINA" -> final = decodeCpuState(slice, is386)
                 "HASH" -> {
                     val raw = ByteArray(length)
                     slice.get(raw)
@@ -93,14 +119,13 @@ internal object MooReader {
                     val flagAddress = slice.int
                     exception = ExceptionInfo(number, flagAddress)
                 }
-                // CYCL and unknown chunks ignored
             }
             buf.position(end)
         }
         return Vector(idx, name, bytes, initial, final, hash, exception)
     }
 
-    private fun decodeCpuState(buf: ByteBuffer): CpuState {
+    private fun decodeCpuState(buf: ByteBuffer, is386: Boolean): CpuState {
         var regs = emptyMap<String, Int>()
         var ram = emptyList<Pair<Int, Int>>()
         while (buf.remaining() >= 8) {
@@ -109,16 +134,7 @@ internal object MooReader {
             val end = buf.position() + length
             val slice = buf.slice().order(ByteOrder.LITTLE_ENDIAN).limit(length)
             when (tag) {
-                "REGS" -> {
-                    var bitmask = slice.short.toInt() and 0xFFFF
-                    val map = linkedMapOf<String, Int>()
-                    REG_ORDER.forEachIndexed { i, name ->
-                        if (bitmask and (1 shl i) != 0) {
-                            map[name] = slice.short.toInt() and 0xFFFF
-                        }
-                    }
-                    regs = map
-                }
+                "REGS", "RG32" -> regs = decodeRegs(slice, is386 || tag == "RG32")
                 "RAM " -> {
                     val count = slice.int
                     ram = List(count) {
@@ -127,10 +143,31 @@ internal object MooReader {
                         addr to value
                     }
                 }
+                // EA32 / QUEU ignored for state-level runners
             }
             buf.position(end)
         }
         return CpuState(regs, ram)
+    }
+
+    private fun decodeRegs(slice: ByteBuffer, is386: Boolean): Map<String, Int> {
+        val map = linkedMapOf<String, Int>()
+        if (is386) {
+            var bitmask = slice.int
+            REG_ORDER_386.forEachIndexed { i, name ->
+                if (bitmask and (1 shl i) != 0) {
+                    map[name] = slice.int
+                }
+            }
+        } else {
+            var bitmask = slice.short.toInt() and 0xFFFF
+            REG_ORDER_16.forEachIndexed { i, name ->
+                if (bitmask and (1 shl i) != 0) {
+                    map[name] = slice.short.toInt() and 0xFFFF
+                }
+            }
+        }
+        return map
     }
 
     private fun readTag(buf: ByteBuffer): String {

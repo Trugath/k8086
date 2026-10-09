@@ -14,6 +14,7 @@ internal fun Emulator8086.executeXlat0() {
     val cond = (rawOpcodeId shr 1) and 7
     val taken = iW xor jccTaken(cond)
     if (taken) {
+        flushInstructionPrefetch()
         regIp += iData0.toByte().toInt()
     }
     // 8088: ~4 not taken / ~16 taken (flat table used 16 for both).
@@ -21,6 +22,21 @@ internal fun Emulator8086.executeXlat0() {
 }
 
 internal fun Emulator8086.executeXlat13(iReg4bit: Int) {
+    if (addressSizeOverrideEn != 0) {
+        val count = if (iReg4bit == 3) reg32u(REG_CX) else reg32u(REG_CX) - 1
+        if (iReg4bit != 3) setReg32(REG_CX, count)
+        val taken = when (iReg4bit) {
+            0 -> count != 0 && regs8[FLAG_ZF].toInt() == 0
+            1 -> count != 0 && regs8[FLAG_ZF].toInt() != 0
+            3 -> count == 0
+            else -> count != 0
+        }
+        if (taken) {
+            flushInstructionPrefetch()
+            regIp += iData0.toByte().toInt()
+        }
+        return
+    }
     // LOOPxx|JCZX - OPCODE 13
     // Matches `scratch_uint = !!--regs16[REG_CX]`:
     // CX is decremented FIRST, and the loop-continues check reads the
@@ -41,12 +57,43 @@ internal fun Emulator8086.executeXlat13(iReg4bit: Int) {
         }
     }
     if (scratchUint != 0) {
+        flushInstructionPrefetch()
         regIp += iData0.toByte().toInt()
     }
 }
 
 internal fun Emulator8086.executeXlat14() {
-    // JMP | CALL short/near - OPCODE 14
+    // JMP | CALL short/near/far - OPCODE 14
+    // 66h near CALL/JMP use rel32 (and CALL pushes a 32-bit return EIP).
+    val shortJmp = iD && iW
+    if (!shortJmp && !iD && operandSizeOverrideEn != 0) {
+        val lo = iData0 and 0xFFFF
+        val hi = instructionRead8((regIp + 3) and 0xFFFF) or
+            (instructionRead8((regIp + 4) and 0xFFFF) shl 8)
+        val rel = lo or (hi shl 16)
+        regIp = (regIp + 5) and 0xFFFF
+        if (!iW) { // CALL near
+            push(regIp)
+            if (pendingException >= 0) return
+        }
+        regIp = (regIp + rel) and 0xFFFF
+        flushInstructionPrefetch()
+        return
+    }
+    // 66h JMP FAR ptr16:32 (EA)
+    if (!iW && iD && operandSizeOverrideEn != 0) {
+        val b0 = instructionRead8((regIp + 1) and 0xFFFF)
+        val b1 = instructionRead8((regIp + 2) and 0xFFFF)
+        val b2 = instructionRead8((regIp + 3) and 0xFFFF)
+        val b3 = instructionRead8((regIp + 4) and 0xFFFF)
+        val offset = b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+        val newCs = instructionRead8((regIp + 5) and 0xFFFF) or
+            (instructionRead8((regIp + 6) and 0xFFFF) shl 8)
+        regs16[REG_CS] = newCs.toShort()
+        regIp = offset and 0xFFFF
+        flushInstructionPrefetch()
+        return
+    }
     regIp += 3 - (if (iD) 1 else 0)
     if (!iW) {
         if (iD) { // JMP far
@@ -57,32 +104,81 @@ internal fun Emulator8086.executeXlat14() {
         }
     }
     regIp += if (iD && iW) iData0.toByte().toInt() else iData0
+    // A 16-bit near branch truncates its target before checking the CS limit.
+    regIp = regIp and 0xFFFF
+    flushInstructionPrefetch()
 }
 
 internal fun Emulator8086.executeXlat19() {
     // RET|RETF|IRET - OPCODE 19
+    //
+    // With 66h (32-bit operand size) in real/VM86 mode:
+    //   RETF/IRET pop a 32-bit EIP, then a dword slot containing a 16-bit CS.
+    //   IRET then pops a 32-bit EFLAGS. Near RET pops only EIP.
     iD = iW
-    regIp = pop()
+    val opsize32 = operandSizeOverrideEn != 0
+    val oldSp = regs16[REG_SP]
+    val targetIp = pop()
     if (pendingException >= 0) return
+    if (opsize32 && (targetIp ushr 16) != 0) {
+        // A return must validate the target against the real-mode CS limit
+        // before committing the stack pop or the immediate stack adjustment.
+        regs16[REG_SP] = oldSp
+        raiseException(13)
+        return
+    }
+    var targetCs = regs16[REG_CS].toInt() and 0xFFFF
     if (extra != 0) { // IRET|RETF|RETF imm16
-        regs16[REG_CS] = pop().toShort()
-        if (pendingException >= 0) return
+        // RETF/IRET read a full CS slot, unlike POP sreg's selector-only read.
+        targetCs = (if (opsize32) pop() else popSelector()) and 0xFFFF
+        if (pendingException >= 0) {
+            regs16[REG_SP] = oldSp
+            return
+        }
     }
     if ((extra and 2) != 0) { // IRET
         val flags = pop()
-        if (pendingException >= 0) return
+        if (pendingException >= 0) {
+            regs16[REG_SP] = oldSp
+            return
+        }
         setFlags(flags and popfValueMask())
     } else if (!iD) { // RET|RETF imm16
         regs16[REG_SP] = ((regs16[REG_SP].toInt() and 0xFFFF) + iData0).toShort()
     }
+    regIp = targetIp and 0xFFFF
+    regs16[REG_CS] = targetCs.toShort()
+    flushInstructionPrefetch()
 }
 
 internal fun Emulator8086.executeXlat32() {
-    // CALL FAR imm16:imm16 - OPCODE 32
+    // CALL FAR ptr16:16 / ptr16:32 (66h) - OPCODE 32
+    val opsize32 = operandSizeOverrideEn != 0
+    val offset: Int
+    val newCs: Int
+    val insnLen: Int
+    if (opsize32) {
+        // 9A offset32 seg16
+        val b0 = instructionRead8((regIp + 1) and 0xFFFF)
+        val b1 = instructionRead8((regIp + 2) and 0xFFFF)
+        val b2 = instructionRead8((regIp + 3) and 0xFFFF)
+        val b3 = instructionRead8((regIp + 4) and 0xFFFF)
+        offset = b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+        newCs = instructionRead8((regIp + 5) and 0xFFFF) or
+            (instructionRead8((regIp + 6) and 0xFFFF) shl 8)
+        insnLen = 7
+    } else {
+        offset = iData0 and 0xFFFF
+        newCs = iData2 and 0xFFFF
+        insnLen = 5
+    }
     push(regs16[REG_CS].toInt() and 0xFFFF)
-    push(regIp + 5)
-    regs16[REG_CS] = iData2.toShort()
-    regIp = iData0
+    if (pendingException >= 0) return
+    push(regIp + insnLen)
+    if (pendingException >= 0) return
+    regs16[REG_CS] = newCs.toShort()
+    regIp = offset and 0xFFFF
+    flushInstructionPrefetch()
 }
 
 internal fun Emulator8086.executeXlat38() {

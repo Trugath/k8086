@@ -44,6 +44,8 @@ class VgaCore {
     var status3daSawActive: Boolean = false // bit0 clear
     var status3daSawHBlank: Boolean = false // bit0 set, bit3 clear
     var status3daSawVSync: Boolean = false
+    var ttyCount: Int = 0
+    var ttyMode13Count: Int = 0
 
     fun chain4(): Boolean = (seq[4] and 0x08) != 0
     fun mapMask(): Int = seq[2] and 0x0F
@@ -125,6 +127,7 @@ class VgaCore {
 
     /**
      * BIOS teletype (INT 10h AH=0Eh) for page 0.
+     * Text modes write B800; Mode 13h draws 8×8 glyphs into chain-4 VRAM (40×25).
      * [readCursor]/writeCursor] bridge to BDA cursor at 40:50.
      */
     fun teletype(
@@ -133,6 +136,12 @@ class VgaCore {
         readCursor: () -> Pair<Int, Int>,
         writeCursor: (row: Int, col: Int) -> Unit,
     ) {
+        ttyCount++
+        if (!isTextMode() && biosMode == 0x13) {
+            ttyMode13Count++
+            teletypeMode13(ch, attr, readCursor, writeCursor)
+            return
+        }
         var (row, col) = readCursor()
         when (ch and 0xFF) {
             0x07 -> { /* bell — ignore */ }
@@ -165,12 +174,73 @@ class VgaCore {
         writeCursor(row.coerceIn(0, ROWS - 1), col.coerceIn(0, COLS - 1))
     }
 
+    /** INT 10h AH=0Eh in 320×200 mode 13h — BIOS draws into the graphics plane. */
+    private fun teletypeMode13(
+        ch: Int,
+        attr: Int,
+        readCursor: () -> Pair<Int, Int>,
+        writeCursor: (row: Int, col: Int) -> Unit,
+    ) {
+        val cols = MODE13_COLS
+        val rows = MODE13_ROWS
+        var (row, col) = readCursor()
+        val fg = attr and 0x0F
+        val bg = (attr ushr 4) and 0x07
+        when (ch and 0xFF) {
+            0x07 -> { /* bell */ }
+            0x08 -> {
+                if (col > 0) col-- else if (row > 0) {
+                    row--
+                    col = cols - 1
+                }
+                putGlyph13(row, col, ' '.code, fg, bg)
+            }
+            0x0A -> row++
+            0x0D -> col = 0
+            else -> {
+                putGlyph13(row, col, ch, fg, bg)
+                col++
+                if (col >= cols) {
+                    col = 0
+                    row++
+                }
+            }
+        }
+        while (row >= rows) {
+            scrollUp13(bg)
+            row = rows - 1
+        }
+        writeCursor(row.coerceIn(0, rows - 1), col.coerceIn(0, cols - 1))
+    }
+
     private fun putChar(row: Int, col: Int, ch: Int, attr: Int) {
         val i = (row * COLS + col) * 2
         if (i in 0 until TEXT_BYTES - 1) {
             textBuffer[i] = (ch and 0xFF).toByte()
             textBuffer[i + 1] = (attr and 0xFF).toByte()
         }
+    }
+
+    private fun putGlyph13(row: Int, col: Int, ch: Int, fg: Int, bg: Int) {
+        if (row !in 0 until MODE13_ROWS || col !in 0 until MODE13_COLS) return
+        val x0 = col * 8
+        val y0 = row * 8
+        for (gy in 0 until 8) {
+            val bits = VgaFont.row(ch, gy)
+            val y = y0 + gy
+            for (gx in 0 until 8) {
+                val color = if ((bits and (0x80 ushr gx)) != 0) fg else bg
+                putPixel13(x0 + gx, y, color)
+            }
+        }
+    }
+
+    private fun putPixel13(x: Int, y: Int, color: Int) {
+        if (x !in 0 until 320 || y !in 0 until 200) return
+        val off = y * 320 + x
+        val plane = off and 3
+        val addr = off ushr 2
+        if (addr < PLANE_SIZE) planes[plane][addr] = (color and 0xFF).toByte()
     }
 
     private fun scrollUp(fillAttr: Int) {
@@ -181,6 +251,19 @@ class VgaCore {
         while (i < TEXT_BYTES) {
             textBuffer[i++] = 0x20
             textBuffer[i++] = a
+        }
+    }
+
+    private fun scrollUp13(fillColor: Int) {
+        // Chain-4: each plane stores every 4th pixel → 80 bytes per scanline.
+        val pitch = 80
+        val shift = pitch * 8
+        val total = pitch * 200
+        val fill = (fillColor and 0xFF).toByte()
+        for (p in 0 until 4) {
+            val plane = planes[p]
+            System.arraycopy(plane, shift, plane, 0, total - shift)
+            plane.fill(fill, total - shift, total)
         }
     }
 
@@ -428,10 +511,17 @@ class VgaCore {
             composeFrame(out)
             for (px in out) if ((px and 0xFFFFFF) != 0) lit++
         }
+        var textNz = 0
+        var i = 0
+        while (i < TEXT_BYTES) {
+            val ch = textBuffer[i].toInt() and 0xFF
+            if (ch != 0 && ch != 0x20) textNz++
+            i += 2
+        }
         return "biosMode=0x${biosMode.toString(16)} text=${isTextMode()} chain4=${chain4()} " +
             "wm=${writeMode()} mapMask=${mapMask()} bitMask=${bitMask()} start=${startAddress()} " +
             "nzVRAM=$nz litPixels=$lit dac1=0x${(dac[1] and 0xFFFFFF).toString(16)} " +
-            "memWr=$memWriteCount wm1=$wm1WriteCount " +
+            "memWr=$memWriteCount wm1=$wm1WriteCount tty=$ttyCount tty13=$ttyMode13Count textNz=$textNz " +
             "3daReads=$status3daReadCount 3daLast=0x${status3daLast.toString(16)} " +
             "sawAct=$status3daSawActive sawHBlank=$status3daSawHBlank sawVSync=$status3daSawVSync"
     }
@@ -440,6 +530,8 @@ class VgaCore {
         const val PLANE_SIZE = 65536
         const val COLS = 80
         const val ROWS = 25
+        const val MODE13_COLS = 40
+        const val MODE13_ROWS = 25
         const val TEXT_BYTES = COLS * ROWS * 2
         const val TEXT_PIXEL_W = COLS * 8
         const val TEXT_PIXEL_H = ROWS * 8

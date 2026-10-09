@@ -7,6 +7,48 @@ package com.trugath.k8086.cpu
  * [CpuState] fields and returns primitive status values only.
  */
 internal class InstructionDecoder(private val cpu: Emulator8086) {
+    // Functional 386 prefetch model. Bus-cycle scheduling is not modeled.
+    // Instruction bytes already fetched survive stores; data reads bypass this queue.
+    private val prefetched = ByteArray(16)
+    private var prefetchCs = -1
+    private var prefetchIp = 0
+    private var prefetchCount = 0
+    private var sequentialIp = -1
+
+    fun flushPrefetch() {
+        prefetchCs = -1
+        prefetchCount = 0
+        sequentialIp = -1
+    }
+
+    private fun beginPrefetch() {
+        val cs = cpu.reg16u(REG_CS)
+        val ip = cpu.regIp and 0xFFFF
+        val consumed = ip - prefetchIp
+        if (cs != prefetchCs || ip != sequentialIp || consumed !in 0..prefetchCount) {
+            prefetchCount = 0
+        } else {
+            for (i in consumed until prefetchCount) prefetched[i - consumed] = prefetched[i]
+            prefetchCount -= consumed
+        }
+        prefetchCs = cs
+        prefetchIp = ip
+        val capacity = minOf(prefetched.size, 0x10000 - ip)
+        while (prefetchCount < capacity) {
+            val phys = ((cs shl 4) + ip + prefetchCount) and cpu.physicalAddressMask
+            prefetched[prefetchCount++] = fetchCodeByte(cpu.mem, cpu.conventionalMemoryEnd, phys).toByte()
+        }
+    }
+
+    fun instructionByte(offset: Int): Int {
+        val off = offset and 0xFFFF
+        val index = off - prefetchIp
+        if (cpu.has386Prefixes && cpu.reg16u(REG_CS) == prefetchCs && index in 0 until prefetchCount) {
+            return prefetched[index].toInt() and 0xFF
+        }
+        val phys = ((cpu.reg16u(REG_CS) shl 4) + off) and cpu.physicalAddressMask
+        return fetchCodeByte(cpu.mem, cpu.conventionalMemoryEnd, phys)
+    }
     fun isPrefixOpcode(opcode: Int): Boolean = when (opcode) {
         0x26, 0x2E, 0x36, 0x3E, // segment overrides
         0xF0, 0xF1, // LOCK (and ICEBP alias on later CPUs; treated as LOCK here)
@@ -29,8 +71,13 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
      * Byte length of the current opcode encoding (excluding prefixes already counted
      * in [CpuState.instructionPrefixBytes]). Used for the 286 10-byte limit.
      */
-    fun encodingLengthBytes(opcode: Int): Int =
-        encodingLengthBytes(opcode, cpu.iMod, cpu.iRm, cpu.iReg, cpu.iW)
+    fun encodingLengthBytes(opcode: Int): Int {
+        val length = encodingLengthBytes(opcode, cpu.iMod, cpu.iRm, cpu.iReg, cpu.iW)
+        if (cpu.addressSizeOverrideEn != 0 && opcode in 0xA0..0xA3) return length + 2
+        if (cpu.addressSizeOverrideEn == 0 || iModSize(opcode) == 0 || cpu.iMod == 3) return length
+        val disp16 = if (cpu.iMod == 0 && cpu.iRm == 6 || cpu.iMod == 2) 2 else if (cpu.iMod == 1) 1 else 0
+        return length - disp16 + cpu.modRm32ExtraBytes()
+    }
 
     fun encodingLengthBytes(opcode: Int, mod: Int, rm: Int, reg: Int, word: Boolean): Int {
         val modDisp =
@@ -41,22 +88,25 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         // when the word bit is set; 81 is imm16. 68/69/6A/6B/C0/C1/C8 bake imm into base.
         val immBytes = when (opcode) {
             0x80, 0x82, 0x83 -> 1
-            0x81 -> 2
+            0x81 -> if (cpu.operandSizeOverrideEn != 0) 4 else 2 // imm32 under 66h
             0x68, 0x69, 0x6A, 0x6B, 0xC8 -> 0
             0xC0, 0xC1 -> 1 // imm8; baseInstSize is opcode+modrm only
             // GRP3 TEST (reg 0 and alias reg 1) takes an immediate; I_W_SIZE is 0
             // because other GRP3 forms have no imm.
             0xF6 -> if (reg <= 1) 1 else 0
-            0xF7 -> if (reg <= 1) 2 else 0
+            0xF7 -> if (reg <= 1) (if (cpu.operandSizeOverrideEn != 0) 4 else 2) else 0
             // Control transfers with baseInstSize 0: length is the full encoding.
-            0x9A, 0xEA -> 5 // CALL/JMP FAR
-            0xE8, 0xE9 -> 3 // CALL/JMP rel16
+            0x9A, 0xEA -> if (cpu.operandSizeOverrideEn != 0) 7 else 5 // CALL/JMP FAR ptr16:32/16
+            0xE8, 0xE9 -> if (cpu.operandSizeOverrideEn != 0) 5 else 3 // CALL/JMP rel32/rel16
             0xEB -> 2 // JMP rel8
             0xC2, 0xCA -> 3 // RET/RETF imm16
             0xC3, 0xCB -> 1 // RET/RETF
-            else -> iWSize(opcode) * (if (word) 2 else 1)
+            else -> iWSize(opcode) * (if (word && cpu.operandSizeOverrideEn != 0) 4 else if (word) 2 else 1)
         }
-        return modDisp + base + immBytes
+        // 68/69 bake imm16 into base; 66h extends those immediates to imm32.
+        val opsizeExtra =
+            if (cpu.operandSizeOverrideEn != 0 && (opcode == 0x68 || opcode == 0x69)) 2 else 0
+        return modDisp + base + immBytes + opsizeExtra
     }
 
     /**
@@ -127,6 +177,7 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         val ip = cpu.regIp
         val ipAddr = (csBase + (ip and 0xFFFF)) and mask
         if (ipAddr >= RAM_SIZE || ipAddr < 0) return false
+        if (cpu.has386Prefixes) beginPrefetch()
         cpu.pendingDivideError = false
         cpu.pendingException = -1
         cpu.suppressIpAdvance = false
@@ -145,6 +196,7 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         val direct = (csBase >= 0 && windowEnd < convEnd && windowEnd < 0xA0000) ||
             (csBase >= ROM_REGION_START && windowEnd < ROM_REGION_END)
         fun codeByte(relative: Int): Int {
+            if (cpu.has386Prefixes) return instructionByte(ip + relative)
             val phys = (csBase + ((ip + relative) and 0xFFFF)) and mask
             if (direct) return mem[phys].toInt() and 0xFF
             if (phys >= 0 && phys < 0xA0000) {
@@ -157,7 +209,7 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         }
 
         fun codeWord(relative: Int): Int {
-            if (direct) {
+            if (direct && !cpu.has386Prefixes) {
                 val p0 = (csBase + ((ip + relative) and 0xFFFF)) and mask
                 val p1 = (csBase + ((ip + relative + 1) and 0xFFFF)) and mask
                 return (mem[p0].toInt() and 0xFF) or ((mem[p1].toInt() and 0xFF) shl 8)
@@ -229,11 +281,32 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         val grp3Reg = cpu.iReg
         val grp3Word = cpu.iW
         val grp3Mem = modSize > 0 && cpu.iMod != 3
+        // Handlers can advance IP while consuming immediates. Capture SIB length
+        // while IP still points at the opcode, rather than rereading later bytes.
+        val addressBytes = if (modSize > 0 && cpu.iMod < 3 && cpu.addressSizeOverrideEn != 0) {
+            cpu.modRm32ExtraBytes()
+        } else -1
+        if (cpu.has386Prefixes) sequentialIp = (ip + encodingLengthBytes(opcode0)) and 0xFFFF
 
-        // True encoding length for the 286 10-byte limit only — 8086/8088 skip this.
-        if (cpu.maxInsnBytes != Int.MAX_VALUE) {
+        // 386 LOCK #UD before execute (8086/286 leave lockPrefixRaisesUd false).
+        // Only the final opcode is checked — further prefixes (seg/66/67/REP) are fine.
+        val lockUd = cpu.lockOverrideEn != 0 &&
+            !isPrefixOpcode(opcodeByte) &&
+            cpu.lockPrefixRaisesUd(opcodeByte)
+        // True encoding length for the 286 10-byte / 386 15-byte limit — 8086/8088 skip.
+        // Also #GP when the full encoding (prefixes + body) wraps past CS:FFFF
+        // (6669.MOO IMUL starting at EIP=FFF8 with a long prefix stack).
+        if (lockUd) {
+            // Invalid encodings fault before accessing their memory operands.
+            // Address decoding may already have queued a segment fault.
+            cpu.pendingException = 6
+        } else if (cpu.maxInsnBytes != Int.MAX_VALUE) {
             val encodingLength = encodingLengthBytes(opcodeByte)
-            if (cpu.instructionPrefixBytes + encodingLength > cpu.maxInsnBytes) {
+            val totalLen = cpu.instructionPrefixBytes + encodingLength
+            val insnStart = (cpu.regIp - cpu.instructionPrefixBytes) and 0xFFFF
+            if (totalLen > cpu.maxInsnBytes || insnStart + totalLen > 0x10000 ||
+                (cpu.has386Prefixes && (cpu.regIp ushr 16) != 0)
+            ) {
                 cpu.raiseException(13)
             } else {
                 cpu.executeXlatOpcode(iReg4bit)
@@ -243,6 +316,11 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         }
 
         cpu.lastOpcodeByte = opcodeByte and 0xFF
+        // Escape handlers consume their own ModR/M/displacement/immediate bytes.
+        // Taken branches flush the queue; sequential escapes keep the lookahead.
+        if (cpu.has386Prefixes && opcodeByte == 0x0F && prefetchCs >= 0) {
+            sequentialIp = cpu.regIp and 0xFFFF
+        }
         cpu.lastInstructionCycles = if (cpu.cycleOverride != CYCLE_OVERRIDE_NONE) {
             cpu.cycleOverride
         } else if (opcodeByte == 0xF6 || opcodeByte == 0xF7) {
@@ -262,42 +340,40 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
             else -> 2
         }
         // Some 186+ encodings bake imm16 into baseInstSize; with 66h they need +2.
+        // C7 is NOT in this list: its imm is already sized via I_W * immUnit (2→4).
         val opsizeImmExtra = if (cpu.operandSizeOverrideEn != 0) {
             when (rawAfter) {
                 0x68, 0x69 -> 2 // PUSH imm32 / IMUL r,r/m,imm32
-                0xC7 -> 2 // MOV r/m32, imm32 (base already counted imm16 via iW)
                 else -> 0
             }
         } else {
             0
         }
-        val ipIncrement = (cpu.iMod * (if (cpu.iMod != 3) 1 else 0) + 2 * (if (cpu.iMod == 0 && cpu.iRm == 6) 1 else 0)) * cpu.iModSize +
+        val modDispBytes = if (cpu.iModSize > 0 && cpu.iMod < 3) {
+            if (cpu.addressSizeOverrideEn != 0) {
+                addressBytes
+            } else {
+                (cpu.iMod * (if (cpu.iMod != 3) 1 else 0) +
+                    2 * (if (cpu.iMod == 0 && cpu.iRm == 6) 1 else 0)) * cpu.iModSize
+            }
+        } else {
+            0
+        }
+        val ipIncrement = modDispBytes +
             (tblBase[rawAfter].toInt() and 0xFF) +
             (tblIW[rawAfter].toInt() and 0xFF) * immUnit +
             opsizeImmExtra
         val faultPending = cpu.pendingDivideError || cpu.pendingException >= 0
         if (!(faultPending && !cpu.advanceIpBeforeDivideError()) && !cpu.suppressIpAdvance) {
             cpu.regIp += ipIncrement
+            if (cpu.operandSizeOverrideEn == 0 &&
+                (opcodeByte in 0x70..0x7F || opcodeByte in 0xE0..0xE3)
+            ) cpu.regIp = cpu.regIp and 0xFFFF
         }
         cpu.suppressIpAdvance = false
-        if (!faultPending && isPrefixOpcode(opcodeByte)) {
-            cpu.instructionPrefixBytes += ipIncrement
-        } else if (!faultPending) {
-            // Prefix holds are sized so the following opcode still sees them after the
-            // start-of-decode decrement (set to 2 → 1). Clear the leftover after that
-            // opcode finishes; otherwise consecutive prefixed instructions keep the
-            // previous hold alive, instructionPrefixBytes never resets, and the 286
-            // 10-byte limit spuriously #GPs (PSP init ES: MOV chain).
-            // Also clears after a mid-REP quantum so Machine.pollHardwareInterrupt
-            // does not see prefixActive and drop the IRQ latch.
-            cpu.segOverrideEn = 0
-            cpu.repOverrideEn = 0
-            cpu.lockOverrideEn = 0
-            cpu.operandSizeOverrideEn = 0
-            cpu.addressSizeOverrideEn = 0
-        }
 
-        // If instruction needs to update SF, ZF and PF, set them as appropriate
+        // SZP / AO must use the instruction's operand width (66h). Clear prefixes
+        // only after flag updates — otherwise dword ADD/SUB get 16-bit SF/ZF/OF.
         if (!faultPending && cpu.setFlagsType and FLAGS_UPDATE_SZP != 0) {
             // ZF must reflect the result truncated to the operand width. The reference
             // C masks op_result via CAST(unsigned char/short) at the operation site, so
@@ -319,17 +395,45 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
             }
         }
 
+        if (!faultPending && isPrefixOpcode(opcodeByte)) {
+            cpu.instructionPrefixBytes += ipIncrement
+        } else if (!faultPending) {
+            // Prefix holds are sized so the following opcode still sees them after the
+            // start-of-decode decrement (set to 2 → 1). Clear the leftover after that
+            // opcode finishes; otherwise consecutive prefixed instructions keep the
+            // previous hold alive, instructionPrefixBytes never resets, and the 286
+            // 10-byte limit spuriously #GPs (PSP init ES: MOV chain).
+            // Also clears after a mid-REP quantum so Machine.pollHardwareInterrupt
+            // does not see prefixActive and drop the IRQ latch.
+            cpu.segOverrideEn = 0
+            cpu.repOverrideEn = 0
+            cpu.lockOverrideEn = 0
+            cpu.operandSizeOverrideEn = 0
+            cpu.addressSizeOverrideEn = 0
+        }
+
         // Deliver #DE / #GP / #SS after IP/flag updates to match silicon.
         if (cpu.pendingDivideError) {
             cpu.pendingDivideError = false
             cpu.pcInterrupt(0, cpu.faultReturnIp())
+            clearPrefixHolds(cpu)
         } else if (cpu.pendingException >= 0) {
             val vector = cpu.pendingException
             cpu.pendingException = -1
             cpu.pcInterrupt(vector, cpu.faultReturnIp())
+            clearPrefixHolds(cpu)
         }
 
         return true
+    }
+
+    private fun clearPrefixHolds(cpu: Emulator8086) {
+        cpu.segOverrideEn = 0
+        cpu.repOverrideEn = 0
+        cpu.lockOverrideEn = 0
+        cpu.operandSizeOverrideEn = 0
+        cpu.addressSizeOverrideEn = 0
+        cpu.instructionPrefixBytes = 0
     }
 
     /**
@@ -348,6 +452,7 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         cpu.iW = cpu.repContinueIW
         cpu.repMode = cpu.repContinueRepMode
         cpu.repOverrideEn = 1
+        cpu.operandSizeOverrideEn = if (cpu.repContinueOperandSize) 1 else 0
         if (cpu.repContinueSegActive) {
             cpu.segOverrideEn = 1
             cpu.segOverride = cpu.repContinueSeg

@@ -113,6 +113,8 @@ class SingleStep8086Test {
 
         val cpu = Emulator8086()
         cpu.conventionalMemoryEnd = 0xA0000
+        // Hardware vectors use the system ROM address range as writable RAM.
+        cpu.allowRomWrites = true
         REGISTER_IDS.forEach { (name, id) ->
             cpu.setReg16(id, initialRegs.required(name).asInt())
         }

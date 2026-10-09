@@ -1,3 +1,5 @@
+import org.apache.tools.ant.filters.FixCrLfFilter
+
 plugins {
     kotlin("jvm")
     application
@@ -62,11 +64,22 @@ distributions {
             }
             // Unix launchers must be executable inside the zip (ZIP stores mode bits).
             filesMatching(listOf("run.sh", "run-cli.sh", "bin/k8086")) {
+                // A Windows checkout may use CRLF. Unix shebangs and shell
+                // commands need LF regardless of the build host.
+                filter(mapOf("eol" to FixCrLfFilter.CrLf.newInstance("lf")), FixCrLfFilter::class.java)
                 permissions {
                     unix("rwxr-xr-x")
                 }
             }
         }
+    }
+}
+
+// Copy filters are not tracked automatically as task inputs. Invalidate an
+// existing distribution when adopting this line-ending policy.
+listOf("distZip", "distTar", "installDist").forEach { taskName ->
+    tasks.named(taskName) {
+        inputs.property("unixLauncherLineEndings", "LF")
     }
 }
 

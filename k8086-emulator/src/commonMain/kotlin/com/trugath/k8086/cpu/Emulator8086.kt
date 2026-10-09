@@ -211,6 +211,8 @@ internal open class Emulator8086(
 
     // Inject an interrupt (hardware IRQ vector, or a service like INT 1 single-step).
     fun serviceInterrupt(vector: Int) = pcInterrupt(vector)
+    internal fun instructionRead8(offset: Int): Int = decoder.instructionByte(offset)
+    internal fun flushInstructionPrefetch() = decoder.flushPrefetch()
 
     // Physical memory access for DMA / device models / ISA cards.
     fun readPhysByte(addr: Int): Int = guestRead8(addr)
@@ -240,7 +242,13 @@ internal open class Emulator8086(
             return
         }
         // ROM write-protect without scanning overlays.
-        if (addr >= ROM_REGION_START && addr < ROM_REGION_END) return
+        // Single-step corpora map code/stack into F6000–FFFFF; allowRomWrites
+        // lets those vectors poke the backing image (still no option-ROM side effects).
+        if (addr >= ROM_REGION_START && addr < ROM_REGION_END) {
+            if (!allowRomWrites) return
+            mem[addr] = (value and 0xFF).toByte()
+            return
+        }
         if (addr >= REGS_BASE) {
             if (addr < RAM_SIZE) mem[addr] = (value and 0xFF).toByte()
             return
@@ -353,11 +361,36 @@ internal open class Emulator8086(
     /** True while a 66h operand-size override applies to the current opcode. */
     internal fun operandSize32(): Boolean = operandSizeOverrideEn != 0 && iW
 
+    /** True while a 67h address-size override applies to the current opcode. */
+    internal fun addressSize32(): Boolean = addressSizeOverrideEn != 0
+
     /** Operand width in bytes for the current instruction (1 / 2 / 4). */
     internal fun operandBytes(): Int = when {
         !iW -> 1
         operandSizeOverrideEn != 0 -> 4
         else -> 2
+    }
+
+    /**
+     * Extra bytes after opcode+ModRM for a 32-bit-address memory form (SIB and/or
+     * displacement). [regIp] must still point at the opcode.
+     */
+    internal fun modRm32ExtraBytes(): Int {
+        var n = 0
+        var sibBase = -1
+        if (iRm == 4) {
+            n += 1
+            val sib = instructionRead8((regIp + 2) and 0xFFFF)
+            sibBase = sib and 7
+        }
+        when (iMod) {
+            0 -> {
+                if (iRm == 5 || (iRm == 4 && sibBase == 5)) n += 4
+            }
+            1 -> n += 1
+            2 -> n += 4
+        }
+        return n
     }
 
     /** Mask a linear address to the CPU's physical bus width. */
@@ -407,40 +440,57 @@ internal open class Emulator8086(
     }
 
     /**
-     * Linear effective address for a ModR/M memory operand (no segment override).
-     * Used by 286 0x0F system instructions that decode their own ModR/M.
+     * Linear effective address for a ModR/M memory operand. Honours an active
+     * segment override (FS/GS/ES/…); otherwise uses the ModR/M default segment.
+     * Used by 0x0F helpers that decode their own ModR/M (SETcc, BT, LSS, …).
      */
-    internal fun effectiveAddressLinear(mod: Int, rm: Int, disp: Int): Int {
+    /**
+     * Segment register index + 16-bit offset for a ModR/M memory operand.
+     * Layout: bits 0..7 = segReg, bits 8..23 = offset.
+     */
+    internal fun effectiveAddressSegOff(mod: Int, rm: Int, disp: Int): Int {
         val packed = modRmComponentsPacked(rm, mod)
         val base = (packed and 0xFF).toInt()
         val index = ((packed shr 8) and 0xFF).toInt()
         val defaultSeg = ((packed shr 16) and 0xFF).toInt()
+        val segReg = if (segOverrideEn != 0) segOverride else defaultSeg
         var offset = (if (base == REG_ZERO) 0 else reg16u(base)) +
             (if (index == REG_ZERO) 0 else reg16u(index))
         if (mod != 0 || rm == 6) offset += disp
-        return segreg(defaultSeg, REG_ZERO, offset and 0xFFFF)
+        return (segReg and 0xFF) or ((offset and 0xFFFF) shl 8)
     }
 
-    // Decode mod, r/m and reg fields — standard 8086 effective-address encoding.
+    internal fun effectiveAddressLinear(mod: Int, rm: Int, disp: Int): Int {
+        val packed = effectiveAddressSegOff(mod, rm, disp)
+        val segReg = packed and 0xFF
+        val offset = (packed shr 8) and 0xFFFF
+        return segreg(segReg, REG_ZERO, offset)
+    }
+
+    // Decode mod, r/m and reg fields — 8086 EA, or 386 32-bit EA with 67h.
     internal fun decodeRmReg() {
         if (iMod < 3) {
-            // Memory addressing: [BX+SI], [BX+DI], [BP+SI], [BP+DI], [SI], [DI],
-            // [disp16] (mod=0 rm=6) or [BP+disp] (mod≠0 rm=6), [BX].
-            // Default segment is DS, except BP-based forms use SS.
-            val packed = modRmComponentsPacked(iRm, iMod)
-            val base = (packed and 0xFF).toInt()
-            val index = ((packed shr 8) and 0xFF).toInt()
-            val defaultSeg = ((packed shr 16) and 0xFF).toInt()
-            val segReg = if (segOverrideEn != 0) segOverride else defaultSeg
-            var offset = (if (base == REG_ZERO) 0 else reg16u(base)) +
-                (if (index == REG_ZERO) 0 else reg16u(index))
-            if (iMod != 0 || iRm == 6) {
-                offset += iData1
+            if (addressSize32()) {
+                decodeRmRegMemory32()
+            } else {
+                // Memory addressing: [BX+SI], [BX+DI], [BP+SI], [BP+DI], [SI], [DI],
+                // [disp16] (mod=0 rm=6) or [BP+disp] (mod≠0 rm=6), [BX].
+                // Default segment is DS, except BP-based forms use SS.
+                val packed = modRmComponentsPacked(iRm, iMod)
+                val base = (packed and 0xFF).toInt()
+                val index = ((packed shr 8) and 0xFF).toInt()
+                val defaultSeg = ((packed shr 16) and 0xFF).toInt()
+                val segReg = if (segOverrideEn != 0) segOverride else defaultSeg
+                var offset = (if (base == REG_ZERO) 0 else reg16u(base)) +
+                    (if (index == REG_ZERO) 0 else reg16u(index))
+                if (iMod != 0 || iRm == 6) {
+                    offset += iData1
+                }
+                rmOffset = offset and 0xFFFF
+                rmSegment = segReg
+                rmIsMemory = true
+                rmAddr = segreg(segReg, REG_ZERO, rmOffset)
             }
-            rmOffset = offset and 0xFFFF
-            rmSegment = segReg
-            rmIsMemory = true
-            rmAddr = segreg(segReg, REG_ZERO, rmOffset)
         } else {
             // Register mode (iMod == 3)
             rmIsMemory = false
@@ -455,6 +505,80 @@ internal open class Emulator8086(
             opFromAddr = rmAddr
             opToAddr = temp
         }
+    }
+
+    /**
+     * 67h ModR/M memory form: optional SIB, 8/32-bit displacement, 32-bit offset
+     * added to the segment base. Real-mode segment limit is 0xFFFF — if the
+     * computed offset exceeds it, raise #GP/#SS (SingleStepTests/80386).
+     *
+     * 386EX undefined SIB: when index==4 (normally "no index"), three SIB table
+     * rows still encode a non-1 scale; silicon applies that scale to the base
+     * register (SingleStepTests/80386 README "Undefined Behavior").
+     */
+    private fun decodeRmRegMemory32() {
+        fun codeAt(rel: Int): Int =
+            instructionRead8((regIp + rel) and 0xFFFF)
+
+        var follow = 2 // first byte after opcode+ModRM
+        var sib = 0
+        val hasSib = iRm == 4
+        if (hasSib) {
+            sib = codeAt(follow)
+            follow++
+        }
+        var disp = 0
+        when (iMod) {
+            0 -> {
+                if (iRm == 5 || (hasSib && (sib and 7) == 5)) {
+                    disp = codeAt(follow) or (codeAt(follow + 1) shl 8) or
+                        (codeAt(follow + 2) shl 16) or (codeAt(follow + 3) shl 24)
+                    follow += 4
+                }
+            }
+            1 -> {
+                disp = codeAt(follow).toByte().toInt()
+                follow++
+            }
+            2 -> {
+                disp = codeAt(follow) or (codeAt(follow + 1) shl 8) or
+                    (codeAt(follow + 2) shl 16) or (codeAt(follow + 3) shl 24)
+                follow += 4
+            }
+        }
+        iData1 = disp
+
+        var offset = disp
+        var defaultSeg = REG_DS
+        if (hasSib) {
+            val scale = 1 shl (sib shr 6)
+            val index = (sib shr 3) and 7
+            val base = sib and 7
+            val basePresent = !(iMod == 0 && base == 5)
+            if (index != 4) {
+                offset += reg32u(index) * scale
+                if (basePresent) offset += reg32u(base)
+            } else if (basePresent) {
+                // Invalid SIB rows: scale applies to base (386EX).
+                offset += reg32u(base) * scale
+            }
+            if (basePresent && (base == REG_BP || base == REG_SP)) defaultSeg = REG_SS
+        } else if (!(iMod == 0 && iRm == 5)) {
+            offset += reg32u(iRm)
+            if (iRm == REG_BP || iRm == REG_SP) defaultSeg = REG_SS
+        }
+
+        val segReg = if (segOverrideEn != 0) segOverride else defaultSeg
+        rmOffset = offset
+        rmSegment = segReg
+        rmIsMemory = true
+        // Real-mode limit 0xFFFF: any offset outside 0..limit is #GP/#SS.
+        if ((offset.toLong() and 0xFFFFFFFFL) > 0xFFFFL && rawOpcodeId != 0x8D) {
+            raiseException(exceptionForWordAccess(segReg))
+            rmAddr = 0
+            return
+        }
+        rmAddr = ((reg16u(segReg) shl 4) + (offset and 0xFFFF)) and physicalAddressMask
     }
     
     // Flag operations
@@ -549,13 +673,15 @@ internal open class Emulator8086(
         }
     }
     
-    // Assemble and return emulated CPU FLAGS register
+    // Assemble and return emulated CPU FLAGS/EFLAGS register.
+    // Low 16 bits always; bits above 15 come from [flagsExtraBits] when the
+    // model exposes them (e.g. 386 AC) via [flagsExtraMask].
     internal fun makeFlags(): Int {
         var flags = flagsReservedOnes() or flagsExtraBits
         for (i in 8 downTo 0) {
             flags += (regs8[FLAG_CF + i].toInt() shl FLAGS_BIT_POSITIONS[i])
         }
-        return flags and 0xFFFF
+        return flags and (0xFFFF or flagsExtraMask())
     }
     
     // Set emulated CPU FLAGS register from flags value
@@ -642,6 +768,14 @@ internal open class Emulator8086(
         else -> 0xFF
     }
 
+    /** Unsigned `<` for width-masked Int values (Kotlin `<` is signed). */
+    internal fun unsignedLess(a: Int, b: Int): Boolean =
+        (a.toLong() and 0xFFFFFFFFL) < (b.toLong() and 0xFFFFFFFFL)
+
+    /** Unsigned `>` for width-masked Int values. */
+    internal fun unsignedGreater(a: Int, b: Int): Boolean =
+        (a.toLong() and 0xFFFFFFFFL) > (b.toLong() and 0xFFFFFFFFL)
+
     internal fun rmAddress(relative: Int): Int =
         if (rmIsMemory) segreg(rmSegment, REG_ZERO, rmOffset + relative) else rmAddr + relative
 
@@ -675,6 +809,8 @@ internal open class Emulator8086(
         if (width == 4) {
             val gpr = gprIndexAt(addr)
             if (gpr >= 0) return reg32u(gpr)
+            // ALU imm32 scratch — high half is not stored at addr+2 (aliases FS).
+            if (addr == REGS_BASE + 2 * REG_SCRATCH) return imm32Scratch
             return guestRead8(addr) or (guestRead8(addr + 1) shl 8) or
                 (guestRead8(addr + 2) shl 16) or (guestRead8(addr + 3) shl 24)
         }
@@ -775,9 +911,12 @@ internal open class Emulator8086(
 
     // INC/DEC by a literal amount. Matches C: MEM_OP(op_from_addr, += 1 - 2*i_reg +, REGS_BASE + 2*REG_ZERO)
     // where REG_ZERO always holds 0, so op_source is always 0 here.
+    // Use readOperand/writeOperand so 66h dword INC/DEC touch the full GPR
+    // (guestRead16 alone would zero the high half on writeOperand width 4).
     internal fun applyIncDec(addr: Int, increment: Int) {
         if (addr < 0 || addr >= RAM_SIZE) return
-        val destVal = if (iW) guestRead16(addr) else guestRead8(addr)
+        val destVal = readOperand(addr)
+        if (pendingException >= 0) return
         opDest = destVal
         opSource = 0
         opResult = destVal + increment
@@ -791,15 +930,18 @@ internal open class Emulator8086(
         val oldSp = regs16[REG_SP].toInt() and 0xFFFF
         val newSp = (oldSp - bytes) and 0xFFFF
         if (bytes == 4) {
-            if (dwordOffsetFaults(newSp)) {
-                raiseException(13)
+            // 386EX: dword push/pop wraps (SP=FFFE OK) but SP=FFFF still #SS.
+            if (wordOffsetFaults(newSp)) {
+                raiseException(exceptionForWordAccess(REG_SS))
                 return
             }
             regs16[REG_SP] = newSp.toShort()
-            writeSegmentDword(REG_SS, newSp, value)
+            writeSegmentDwordWrapped(REG_SS, newSp, value)
         } else {
             if (wordOffsetFaults(newSp)) {
-                raiseException(13) // #GP — real-mode wrap fault (corpus uses 13, not #SS)
+                // 286 SingleStep corpus reports #GP(13) for SS:FFFF word push;
+                // 386 overrides exceptionForWordAccess(SS) → #SS(12).
+                raiseException(exceptionForWordAccess(REG_SS))
                 return
             }
             regs16[REG_SP] = newSp.toShort()
@@ -813,19 +955,57 @@ internal open class Emulator8086(
         val oldSp = regs16[REG_SP].toInt() and 0xFFFF
         val bytes = if (operandSizeOverrideEn != 0) 4 else 2
         if (bytes == 4) {
+            // 386EX: full dword POP (GPR/POPFD) #SS when SP>FFFC (6658.MOO).
+            // POP sreg uses [popSelector] instead — word read + SP+=4 may wrap.
             if (dwordOffsetFaults(oldSp)) {
-                raiseException(13)
+                raiseException(exceptionForWordAccess(REG_SS))
                 return 0
             }
             regs16[REG_SP] = ((oldSp + 4) and 0xFFFF).toShort()
             return readSegmentDword(REG_SS, oldSp)
         }
         if (wordOffsetFaults(oldSp)) {
-            raiseException(13) // #GP
+            raiseException(exceptionForWordAccess(REG_SS))
             return 0
         }
         regs16[REG_SP] = ((oldSp + 2) and 0xFFFF).toShort()
         return readSegmentWord(REG_SS, oldSp)
+    }
+
+    /**
+     * POP into a segment register: always samples a 16-bit selector, but under
+     * 66h still advances SP by 4 (Intel SDM). 386EX allows the word read at
+     * SP=FFFE (6607.MOO) even though a full dword POP would #SS there.
+     */
+    internal fun popSelector(): Int {
+        val oldSp = regs16[REG_SP].toInt() and 0xFFFF
+        val bytes = if (operandSizeOverrideEn != 0) 4 else 2
+        if (wordOffsetFaults(oldSp)) {
+            raiseException(exceptionForWordAccess(REG_SS))
+            return 0
+        }
+        val value = readSegmentWord(REG_SS, oldSp)
+        if (pendingException >= 0) return 0
+        regs16[REG_SP] = ((oldSp + bytes) and 0xFFFF).toShort()
+        return value and 0xFFFF
+    }
+
+    /** Dword stack read with 16-bit offset wrap (no #GP/#SS on FFFD..FFFF). */
+    internal fun readSegmentDwordWrapped(segmentReg: Int, offset: Int): Int {
+        val off = offset and 0xFFFF
+        val b0 = guestRead8(segreg(segmentReg, REG_ZERO, off))
+        val b1 = guestRead8(segreg(segmentReg, REG_ZERO, (off + 1) and 0xFFFF))
+        val b2 = guestRead8(segreg(segmentReg, REG_ZERO, (off + 2) and 0xFFFF))
+        val b3 = guestRead8(segreg(segmentReg, REG_ZERO, (off + 3) and 0xFFFF))
+        return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+    }
+
+    internal fun writeSegmentDwordWrapped(segmentReg: Int, offset: Int, value: Int) {
+        val off = offset and 0xFFFF
+        guestWrite8(segreg(segmentReg, REG_ZERO, off), value)
+        guestWrite8(segreg(segmentReg, REG_ZERO, (off + 1) and 0xFFFF), value shr 8)
+        guestWrite8(segreg(segmentReg, REG_ZERO, (off + 2) and 0xFFFF), value shr 16)
+        guestWrite8(segreg(segmentReg, REG_ZERO, (off + 3) and 0xFFFF), value shr 24)
     }
 
     internal fun readSegmentDword(segmentReg: Int, offset: Int): Int {
@@ -873,12 +1053,48 @@ internal open class Emulator8086(
      */
     internal open fun dwordOffsetFaults(offset: Int): Boolean = false
 
+    /**
+     * When a string op #GP/#SSs on a wrapping word/dword pointer: 286 microcode
+     * still advances SI/DI (and may touch CX); 386EX leaves pointers and CX put
+     * (66A5.MOO / INS-OUTS). Default matches 286.
+     */
+    internal open fun stringWrapFaultCommitsSideEffects(): Boolean = true
+
     internal open fun exceptionForWordAccess(segmentReg: Int): Int = 13 // #GP(0)
     
-    // Index increment/decrement
+    // Index increment/decrement. 67h uses the full 32-bit GPR (6766A5.MOO).
     internal fun indexInc(regId: Int) {
         val increment = (2 * regs8[FLAG_DF].toInt() - 1) * operandBytes()
-        regs16[regId] = ((regs16[regId].toInt() and 0xFFFF) - increment).toShort()
+        if (addressSize32()) {
+            setReg32(regId, reg32u(regId) - increment)
+        } else {
+            regs16[regId] = ((regs16[regId].toInt() and 0xFFFF) - increment).toShort()
+        }
+    }
+
+    /** SI/DI/ESI/EDI value used by the current string op. */
+    internal fun stringIndex(regId: Int): Int =
+        if (addressSize32()) reg32u(regId) else regs16[regId].toInt() and 0xFFFF
+
+    /**
+     * 67h real-mode: any string index with bits 31:16 set is #GP/#SS before the
+     * access (Intel SDM). 16-bit address-size never trips this.
+     */
+    internal fun stringIndexHighFaults(index: Int): Boolean =
+        addressSize32() && (index ushr 16) != 0
+
+    /** REP count register: ECX with 67h, otherwise CX. */
+    internal fun repCount(): Int =
+        if (addressSize32()) reg32u(REG_CX) else regs16[REG_CX].toInt() and 0xFFFF
+
+    internal fun decRepCount() {
+        if (addressSize32()) setReg32(REG_CX, reg32u(REG_CX) - 1)
+        else regs16[REG_CX] = ((regs16[REG_CX].toInt() and 0xFFFF) - 1).toShort()
+    }
+
+    internal fun incRepCount() {
+        if (addressSize32()) setReg32(REG_CX, reg32u(REG_CX) + 1)
+        else regs16[REG_CX] = ((regs16[REG_CX].toInt() and 0xFFFF) + 1).toShort()
     }
     
     // Interrupt handling
@@ -886,6 +1102,7 @@ internal open class Emulator8086(
     // hardware timer/keyboard tick is gated by IF, and that's already checked by the
     // caller before invoking pcInterrupt(0xA)/pcInterrupt(7)); CF is never touched.
     internal fun pcInterrupt(intNum: Int, returnIp: Int = regIp) {
+        decoder.flushPrefetch()
         interruptTrace?.invoke(intNum, regs16[REG_CS].toInt() and 0xFFFF, returnIp and 0xFFFF)
         // Any interrupt wakes the CPU from a HLT.
         halted = false
@@ -895,6 +1112,12 @@ internal open class Emulator8086(
         // of which opcode (INT3/INTO/a real INT imm8/a hardware tick) triggered this.
         setOpcode(0xCD)
 
+        // Read the IVT entry before pushing the frame — a low SS:SP can overlap
+        // the IVT (SingleStepTests/80386 BOUND with SS=1, SP=8 overwrites vector 5).
+        val intAddr = intNum * 4
+        val newIp = guestRead16(intAddr)
+        val newCs = guestRead16(intAddr + 2)
+
         // Real-mode interrupt frames are always 16-bit, even under a 66h hold.
         val savedOperandSize = operandSizeOverrideEn
         operandSizeOverrideEn = 0
@@ -903,9 +1126,8 @@ internal open class Emulator8086(
         push(returnIp and 0xFFFF)
         operandSizeOverrideEn = savedOperandSize
 
-        val intAddr = intNum * 4
-        regIp = guestRead16(intAddr)
-        regs16[REG_CS] = guestRead16(intAddr + 2).toShort()
+        regIp = newIp
+        regs16[REG_CS] = newCs.toShort()
 
         regs8[FLAG_IF] = 0
         regs8[FLAG_TF] = 0
@@ -917,6 +1139,7 @@ internal open class Emulator8086(
     // 8086-family reset state: CS=0xFFFF, IP=0, DS=ES=SS=0, flags cleared,
     // interrupts disabled. Execution begins at 0xFFFF0.
     open fun reset() {
+        decoder.flushPrefetch()
         regs16[REG_CS] = 0xFFFF.toShort()
         regs16[REG_DS] = 0
         regs16[REG_ES] = 0
@@ -1012,6 +1235,12 @@ internal open class Emulator8086(
 
     /** 286 raises #UD for far CALL/JMP with a register ModR/M form; 8086 does not. */
     internal open fun farIndirectRegisterFormRaisesUd(): Boolean = false
+
+    /**
+     * 386+: LOCK is only legal with a subset of memory-updating forms. When true,
+     * the decoder raises #UD instead of executing [opcode]. 8086/286 ignore LOCK.
+     */
+    internal open fun lockPrefixRaisesUd(opcode: Int): Boolean = false
 
     /**
      * Flags applied on AAM with immediate 0 before #DE is raised.
@@ -1193,10 +1422,11 @@ internal open class Emulator8086(
     }
     fun setReg32Value(index: Int, value: Int) = setReg32(index, value)
     fun setIp(value: Int) {
+        decoder.flushPrefetch() // Host/debugger relocation, including same-address edits.
         regIp = value and 0xFFFF
     }
     fun setFlagsValue(value: Int) {
-        setFlags(value and 0xFFFF)
+        setFlags(value and (0xFFFF or flagsExtraMask()))
         updateTrapPending()
     }
 }

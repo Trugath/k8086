@@ -962,11 +962,15 @@ class Machine(
                     }
                     break
                 }
-                if (dumpDir != null &&
-                    instructionsExecuted - lastDumpInsn >= 8_000_000L
-                ) {
-                    lastDumpInsn = instructionsExecuted
-                    dumpVgaPng(dumpDir, instructionsExecuted)
+                if (dumpDir != null) {
+                    val every = HostPlatform.getenv("K8086_VGA_DUMP_EVERY")?.toLongOrNull() ?: 8_000_000L
+                    val start = HostPlatform.getenv("K8086_VGA_DUMP_START")?.toLongOrNull() ?: 0L
+                    if (instructionsExecuted >= start &&
+                        instructionsExecuted - lastDumpInsn >= every
+                    ) {
+                        lastDumpInsn = instructionsExecuted
+                        dumpVgaPng(dumpDir, instructionsExecuted)
+                    }
                 }
                 if (expect != null &&
                     instructionsExecuted % expectEvery == 0L &&
@@ -1088,8 +1092,46 @@ class Machine(
     private fun dumpVgaPng(dir: String, insn: Long) {
         val cs = cpu.getReg16(REG_CS)
         val ip = cpu.getIp()
+        val ss = cpu.getReg16(REG_SS)
+        val sp = cpu.getReg16(REG_SP)
+        val ds = cpu.getReg16(REG_DS)
+        val es = cpu.getReg16(REG_ES)
+        fun pb(seg: Int, off: Int, n: Int = 8): String =
+            (0 until n).joinToString(" ") { i ->
+                (cpu.readPhysByte(((seg and 0xFFFF) shl 4) + ((off + i) and 0xFFFF)) and 0xFF)
+                    .toString(16).uppercase().padStart(2, '0')
+            }
+        fun w(seg: Int, off: Int): Int {
+            val p = ((seg and 0xFFFF) shl 4) + (off and 0xFFFF)
+            return (cpu.readPhysByte(p) and 0xFF) or ((cpu.readPhysByte(p + 1) and 0xFF) shl 8)
+        }
+        val ax = cpu.getReg16(REG_AX)
+        val bx = cpu.getReg16(REG_BX)
+        val cx = cpu.getReg16(REG_CX)
+        val dx = cpu.getReg16(REG_DX)
+        val si = cpu.getReg16(REG_SI)
+        val di = cpu.getReg16(REG_DI)
+        fun asciiz(seg: Int, off: Int, max: Int = 48): String = buildString {
+            for (i in 0 until max) {
+                val c = cpu.readPhysByte(((seg and 0xFFFF) shl 4) + ((off + i) and 0xFFFF)) and 0xFF
+                if (c == 0) break
+                append(if (c in 32..126) c.toChar() else '.')
+            }
+        }
+        val stack = (0 until 8).joinToString(" ") { i -> hex4(w(ss, sp + i * 2)) }
+        val far230 = "${hex4(w(ds, 0x232))}:${hex4(w(ds, 0x230))}"
+        val far220 = "${hex4(w(ds, 0x222))}:${hex4(w(ds, 0x220))}"
+        val far18 = "${hex4(w(ds, 0x1A))}:${hex4(w(ds, 0x18))}"
+        val imm585 = hex4(w(0x6982, 0x0585))
         dumpCardDebug(loadedCards(), dir, insn) {
-            "VGA_DIAG insn=$insn CS:IP=${hex4(cs)}:${hex4(ip)}"
+            "VGA_DIAG insn=$insn CS:IP=${hex4(cs)}:${hex4(ip)} " +
+                "AX=${hex4(ax)} BX=${hex4(bx)} CX=${hex4(cx)} DX=${hex4(dx)} " +
+                "SI=${hex4(si)} DI=${hex4(di)} " +
+                "DS=${hex4(ds)} ES=${hex4(es)} SS:SP=${hex4(ss)}:${hex4(sp)} " +
+                "stack=[$stack] atIP=${pb(cs, ip, 8)} " +
+                "dsDx='${asciiz(ds, dx)}' csDx='${asciiz(cs, dx)}' dsSi='${asciiz(ds, si)}' " +
+                "dxHex=${pb(ds, dx, 12)} csDxHex=${pb(cs, dx, 12)} " +
+                "far230=$far230 far220=$far220 far18=$far18 imm585=$imm585"
         }
     }
 

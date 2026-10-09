@@ -57,9 +57,60 @@ tasks.register<JavaExec>("run") {
     classpath = compilation.output.allOutputs + compilation.runtimeDependencyFiles
 }
 
+// rmDOS scripts/tests expect the classic application-plugin layout:
+//   build/install/k8086-emulator/bin/k8086-emulator → MainKt CLI
+tasks.register("installDist") {
+    group = "distribution"
+    description = "Install CLI start scripts under build/install/k8086-emulator"
+    dependsOn("jvmJar")
+    doLast {
+        val compilation = kotlin.jvm().compilations.getByName("main")
+        val jvmJarFile = tasks.named<Jar>("jvmJar").get().archiveFile.get().asFile
+        val runtimeFiles =
+            (
+                listOf(jvmJarFile) +
+                    compilation.runtimeDependencyFiles.files.filter { it.isFile && it.extension == "jar" }
+                )
+                .distinctBy { it.name }
+        val installRoot = layout.buildDirectory.dir("install/k8086-emulator").get().asFile
+        val libDir = installRoot.resolve("lib")
+        val binDir = installRoot.resolve("bin")
+        libDir.mkdirs()
+        binDir.mkdirs()
+        libDir.listFiles()?.forEach { it.delete() }
+        for (jar in runtimeFiles) {
+            jar.copyTo(libDir.resolve(jar.name), overwrite = true)
+        }
+        val classpathUnix = runtimeFiles.joinToString(":") { "\$APP_HOME/lib/${it.name}" }
+        val classpathWin = runtimeFiles.joinToString(";") { "%APP_HOME%\\lib\\${it.name}" }
+        val main = "com.trugath.k8086.MainKt"
+        binDir.resolve("k8086-emulator").writeText(
+            """
+            #!/bin/sh
+            APP_HOME=${'$'}(cd "$(dirname "$0")/.." && pwd)
+            exec java -cp "$classpathUnix" $main "${'$'}@"
+            """.trimIndent() + "\n",
+        )
+        binDir.resolve("k8086-emulator").setExecutable(true)
+        binDir.resolve("k8086-emulator.bat").writeText(
+            """
+            @echo off
+            set APP_HOME=%~dp0..
+            java -cp "$classpathWin" $main %*
+            """.trimIndent() + "\r\n",
+        )
+    }
+}
+
 tasks.named<Test>("jvmTest") {
     useJUnitPlatform {
-        excludeTags("single-step-8086", "single-step-8088", "single-step-80286", "cpu-performance")
+        excludeTags(
+            "single-step-8086",
+            "single-step-8088",
+            "single-step-80286",
+            "single-step-80386",
+            "cpu-performance",
+        )
     }
     workingDir = rootProject.projectDir
     testLogging {
@@ -114,6 +165,21 @@ val singleStep80286Test by tasks.registering(Test::class) {
         "single-step-80286",
         "Runs hardware-generated single-step 80286 (v1_real_mode) conformance tests.",
     )
+}
+
+val singleStep80386Test by tasks.registering(Test::class) {
+    configureSingleStepSuite(
+        "single-step-80386",
+        "Runs architectural 80386 conformance; reports unresolved EX peripheral captures as skipped.",
+    )
+}
+
+val singleStep386ExHardwareTest by tasks.registering(Test::class) {
+    configureSingleStepSuite(
+        "single-step-80386",
+        "Compares the 80386 core with raw 386EX hardware captures, including known differences.",
+    )
+    systemProperty("k8086.singleStep.386ExHardware", "true")
 }
 
 val cpuPerformanceTest by tasks.registering(Test::class) {

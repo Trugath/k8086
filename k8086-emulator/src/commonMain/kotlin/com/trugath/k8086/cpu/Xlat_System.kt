@@ -120,27 +120,35 @@ internal fun Emulator8086.executeXlat49() {
     val dword = operandSizeOverrideEn != 0
     val step = if (dword) 4 else 2
     val sp = regs16[REG_SP].toInt() and 0xFFFF
-    for (i in 1..8) {
-        val off = (sp - step * i) and 0xFFFF
-        if (dword) {
-            if (dwordOffsetFaults(off)) {
-                raiseException(13)
+    val startSpHi = gprHi[REG_SP]
+    if (!dword) {
+        for (i in 1..8) {
+            val off = (sp - step * i) and 0xFFFF
+            if (wordOffsetFaults(off)) {
+                raiseException(exceptionForWordAccess(REG_SS))
                 return
             }
-        } else if (wordOffsetFaults(off)) {
-            raiseException(13)
-            return
         }
     }
+    // 386EX PUSHAD: dword-aligned SP may wrap (SP=8 → FFE8). Misaligned SP
+    // below 0x20 still writes the full 32-byte image (including through
+    // SS:FFFF), then #SS with SP restored (6660.MOO #302/#956).
+    val pushadWrapFault = dword && sp < 0x20 && (sp and 3) != 0
     if (dword) {
-        push(reg32u(REG_AX))
-        push(reg32u(REG_CX))
-        push(reg32u(REG_DX))
-        push(reg32u(REG_BX))
-        push(sp) // PUSHAD stores zero-extended original SP in the ESP slot
-        push(reg32u(REG_BP))
-        push(reg32u(REG_SI))
-        push(reg32u(REG_DI))
+        fun pushAdDword(value: Int) {
+            val oldSp = regs16[REG_SP].toInt() and 0xFFFF
+            val newSp = (oldSp - 4) and 0xFFFF
+            regs16[REG_SP] = newSp.toShort()
+            writeSegmentDwordWrapped(REG_SS, newSp, value)
+        }
+        pushAdDword(reg32u(REG_AX))
+        pushAdDword(reg32u(REG_CX))
+        pushAdDword(reg32u(REG_DX))
+        pushAdDword(reg32u(REG_BX))
+        pushAdDword(sp) // original SP, zero-extended
+        pushAdDword(reg32u(REG_BP))
+        pushAdDword(reg32u(REG_SI))
+        pushAdDword(reg32u(REG_DI))
     } else {
         push(regs16[REG_AX].toInt() and 0xFFFF)
         push(regs16[REG_CX].toInt() and 0xFFFF)
@@ -151,55 +159,63 @@ internal fun Emulator8086.executeXlat49() {
         push(regs16[REG_SI].toInt() and 0xFFFF)
         push(regs16[REG_DI].toInt() and 0xFFFF)
     }
+    if (pushadWrapFault) {
+        regs16[REG_SP] = sp.toShort()
+        gprHi[REG_SP] = startSpHi
+        raiseException(exceptionForWordAccess(REG_SS))
+    }
 }
 
 internal fun Emulator8086.executeXlat50() {
     // POPA / POPAD (66h) (0x61)
+    // On mid-instruction #SS/#GP, 386EX keeps already-written GPRs but restores
+    // SP to the value at instruction start before the fault frame is pushed.
     iW = true
     val dword = operandSizeOverrideEn != 0
-    val step = if (dword) 4 else 2
-    val sp = regs16[REG_SP].toInt() and 0xFFFF
-    for (i in 0 until 8) {
-        val off = (sp + step * i) and 0xFFFF
-        if (dword) {
-            if (dwordOffsetFaults(off)) {
-                raiseException(13)
-                return
-            }
-        } else if (wordOffsetFaults(off)) {
-            raiseException(13)
-            return
-        }
+    val startSp = reg16u(REG_SP)
+    val startSpHi = gprHi[REG_SP]
+    // No blanket wrap reject: POPAD at SP=FFF4 succeeds (6661.MOO); SP=FFFE
+    // still #SS via dword pop. Mid-fault restores SP below.
+    fun commit(reg: Int, value: Int) {
+        if (dword) setReg32(reg, value) else regs16[reg] = (value and 0xFFFF).toShort()
     }
-    val di = pop(); if (pendingException >= 0) return
-    val si = pop(); if (pendingException >= 0) return
-    val bp = pop(); if (pendingException >= 0) return
-    pop(); if (pendingException >= 0) return // discard saved SP/ESP
-    val bx = pop(); if (pendingException >= 0) return
-    val dx = pop(); if (pendingException >= 0) return
-    val cx = pop(); if (pendingException >= 0) return
-    val ax = pop(); if (pendingException >= 0) return
+    fun abort(): Boolean {
+        if (pendingException < 0) return false
+        regs16[REG_SP] = startSp.toShort()
+        gprHi[REG_SP] = startSpHi
+        return true
+    }
+    // The 286 commits GPRs only after all reads succeed; the 386EX commits
+    // each completed pop even if a later pop faults.
+    val incremental = has386Prefixes
+    val di = pop(); if (abort()) return else if (incremental) commit(REG_DI, di)
+    val si = pop(); if (abort()) return else if (incremental) commit(REG_SI, si)
+    val bp = pop(); if (abort()) return else if (incremental) commit(REG_BP, bp)
+    val savedSp = pop(); if (abort()) return
     if (dword) {
-        setReg32(REG_DI, di)
-        setReg32(REG_SI, si)
-        setReg32(REG_BP, bp)
-        setReg32(REG_BX, bx)
-        setReg32(REG_DX, dx)
-        setReg32(REG_CX, cx)
-        setReg32(REG_AX, ax)
-    } else {
-        regs16[REG_DI] = di.toShort()
-        regs16[REG_SI] = si.toShort()
-        regs16[REG_BP] = bp.toShort()
-        regs16[REG_BX] = bx.toShort()
-        regs16[REG_DX] = dx.toShort()
-        regs16[REG_CX] = cx.toShort()
-        regs16[REG_AX] = ax.toShort()
+        setReg32(REG_SP, (savedSp and 0xFFFF0000.toInt()) or reg16u(REG_SP))
+    }
+    val bx = pop(); if (abort()) return else if (incremental) commit(REG_BX, bx)
+    val dx = pop(); if (abort()) return else if (incremental) commit(REG_DX, dx)
+    val cx = pop(); if (abort()) return else if (incremental) commit(REG_CX, cx)
+    val ax = pop(); if (abort()) return else if (incremental) commit(REG_AX, ax)
+    if (!incremental) {
+        commit(REG_DI, di)
+        commit(REG_SI, si)
+        commit(REG_BP, bp)
+        commit(REG_BX, bx)
+        commit(REG_DX, dx)
+        commit(REG_CX, cx)
+        commit(REG_AX, ax)
     }
 }
 
 internal fun Emulator8086.executeXlat51() {
-    // BOUND r16, m32 (0x62)
+    // BOUND r16,m32 / r32,m64 (66h)
+    if (addressSizeOverrideEn != 0 && rmIsMemory && rmOffset > 0x10000 - (if (operandSizeOverrideEn != 0) 8 else 4)) {
+        raiseException(exceptionForWordAccess(rmSegment))
+        return
+    }
     iW = true
     iD = false
     decodeRmReg()
@@ -207,18 +223,37 @@ internal fun Emulator8086.executeXlat51() {
         raiseException(6) // #UD — register form is invalid
         return
     }
-    val index = regs16[iReg].toInt().toShort().toInt()
-    val low = readOperand(rmAddr).toShort().toInt()
-    if (pendingException >= 0) return
-    if (wordOffsetFaults((rmOffset + 2) and 0xFFFF)) {
-        raiseException(exceptionForWordAccess(rmSegment))
-        return
-    }
-    val high = (
-        guestRead8(rmAddress(2)) or (guestRead8(rmAddress(3)) shl 8)
-        ).toShort().toInt()
-    if (index < low || index > high) {
-        raiseException(5) // #BR
+    val dword = operandSizeOverrideEn != 0
+    if (dword) {
+        val index = reg32u(iReg)
+        if (dwordOffsetFaults(rmOffset and 0xFFFF) ||
+            dwordOffsetFaults((rmOffset + 4) and 0xFFFF)
+        ) {
+            raiseException(exceptionForWordAccess(rmSegment))
+            return
+        }
+        val low = readSegmentDword(rmSegment, rmOffset and 0xFFFF)
+        if (pendingException >= 0) return
+        val high = readSegmentDword(rmSegment, (rmOffset + 4) and 0xFFFF)
+        if (pendingException >= 0) return
+        // Signed 32-bit compare
+        if (index < low || index > high) {
+            raiseException(5) // #BR
+        }
+    } else {
+        val index = regs16[iReg].toInt().toShort().toInt()
+        val low = readOperand(rmAddr).toShort().toInt()
+        if (pendingException >= 0) return
+        if (wordOffsetFaults((rmOffset + 2) and 0xFFFF)) {
+            raiseException(exceptionForWordAccess(rmSegment))
+            return
+        }
+        val high = (
+            guestRead8(rmAddress(2)) or (guestRead8(rmAddress(3)) shl 8)
+            ).toShort().toInt()
+        if (index < low || index > high) {
+            raiseException(5) // #BR
+        }
     }
 }
 
@@ -229,8 +264,8 @@ internal fun Emulator8086.executeXlat52() {
             iW = true
             if (operandSizeOverrideEn != 0) {
                 val lo = iData0 and 0xFFFF
-                val hi = guestRead8(segreg(REG_CS, REG_ZERO, (regIp + 3) and 0xFFFF)) or
-                    (guestRead8(segreg(REG_CS, REG_ZERO, (regIp + 4) and 0xFFFF)) shl 8)
+                val hi = instructionRead8((regIp + 3) and 0xFFFF) or
+                    (instructionRead8((regIp + 4) and 0xFFFF) shl 8)
                 push(lo or (hi shl 16))
             } else {
                 push(iData0 and 0xFFFF)
@@ -241,29 +276,58 @@ internal fun Emulator8086.executeXlat52() {
             val imm = iData0.toByte().toInt()
             push(if (operandSizeOverrideEn != 0) imm else imm and 0xFFFF)
         }
-        0x69, 0x6B -> { // IMUL r16, r/m16, imm16/imm8
+        0x69, 0x6B -> { // IMUL r16/32, r/m, imm16/imm32/imm8
             iW = true
             iD = false
             decodeRmReg()
-            val src = readOperand(rmAddr).toShort().toInt()
-            if (pendingException >= 0) return
-            val immOffset = 2 + iMod * (if (iMod != 3) 1 else 0) +
-                2 * (if (iMod == 0 && iRm == 6) 1 else 0)
-            val imm = if (rawOpcodeId == 0x6B) {
-                guestRead8(segreg(REG_CS, REG_ZERO, (regIp + immOffset) and 0xFFFF))
-                    .toByte().toInt()
+            val opsize32 = operandSizeOverrideEn != 0
+            val src = if (opsize32) {
+                readOperand(rmAddr)
             } else {
-                val lo = guestRead8(segreg(REG_CS, REG_ZERO, (regIp + immOffset) and 0xFFFF))
-                val hi = guestRead8(segreg(REG_CS, REG_ZERO, (regIp + immOffset + 1) and 0xFFFF))
+                readOperand(rmAddr).toShort().toInt()
+            }
+            if (pendingException >= 0) return
+            val dispBytes = if (iModSize > 0 && iMod < 3) {
+                if (addressSizeOverrideEn != 0) {
+                    modRm32ExtraBytes()
+                } else {
+                    (iMod * (if (iMod != 3) 1 else 0) +
+                        2 * (if (iMod == 0 && iRm == 6) 1 else 0)) * iModSize
+                }
+            } else {
+                0
+            }
+            val immOffset = 2 + dispBytes
+            val imm = if (rawOpcodeId == 0x6B) {
+                instructionRead8((regIp + immOffset) and 0xFFFF)
+                    .toByte().toInt()
+            } else if (opsize32) {
+                val b0 = instructionRead8((regIp + immOffset) and 0xFFFF)
+                val b1 = instructionRead8((regIp + immOffset + 1) and 0xFFFF)
+                val b2 = instructionRead8((regIp + immOffset + 2) and 0xFFFF)
+                val b3 = instructionRead8((regIp + immOffset + 3) and 0xFFFF)
+                b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+            } else {
+                val lo = instructionRead8((regIp + immOffset) and 0xFFFF)
+                val hi = instructionRead8((regIp + immOffset + 1) and 0xFFFF)
                 (lo or (hi shl 8)).toShort().toInt()
             }
             val product = src.toLong() * imm.toLong()
-            val truncated = product.toInt() and 0xFFFF
-            regs16[iReg] = truncated.toShort()
-            opResult = truncated
-            val overflows = product != truncated.toShort().toLong()
-            setCF(overflows)
-            setOF(overflows)
+            if (opsize32) {
+                val truncated = product.toInt()
+                setReg32(iReg, truncated)
+                opResult = truncated
+                val overflows = product != truncated.toLong()
+                setCF(overflows)
+                setOF(overflows)
+            } else {
+                val truncated = product.toInt() and 0xFFFF
+                regs16[iReg] = truncated.toShort()
+                opResult = truncated
+                val overflows = product != truncated.toShort().toLong()
+                setCF(overflows)
+                setOF(overflows)
+            }
             setFlagsType = FLAGS_UPDATE_SZP
         }
     }
@@ -278,29 +342,44 @@ internal fun Emulator8086.executeXlat54() {
     // but successful stack writes remain (residue below the exception frame).
     val savedSp = regs16[REG_SP].toInt() and 0xFFFF
     val savedBp = regs16[REG_BP].toInt() and 0xFFFF
+    val savedEbp = getReg32(REG_BP)
+    val dword = operandSize32()
+    val width = operandBytes()
     fun rollbackEnter(): Boolean {
         if (pendingException < 0) return false
         regs16[REG_SP] = savedSp.toShort()
         regs16[REG_BP] = savedBp.toShort()
+        if (dword) setReg32(REG_BP, savedEbp)
         return true
     }
-    push(regs16[REG_BP].toInt() and 0xFFFF)
+    fun pushEnter(value: Int) {
+        val nextSp = ((regs16[REG_SP].toInt() and 0xFFFF) - width) and 0xFFFF
+        // ENTER's frame writes must fit within SS even though ordinary PUSH
+        // uses the wrapped stack-write path on the 386EX.
+        if (dword && dwordOffsetFaults(nextSp)) {
+            raiseException(exceptionForWordAccess(REG_SS))
+        } else {
+            push(value)
+        }
+    }
+    pushEnter(if (dword) savedEbp else savedBp)
     if (rollbackEnter()) return
     val frameTemp = regs16[REG_SP].toInt() and 0xFFFF
     if (nesting > 0) {
         var level = 1
         while (level < nesting) {
-            regs16[REG_BP] = ((regs16[REG_BP].toInt() and 0xFFFF) - 2).toShort()
-            val link = readSegmentWord(REG_SS, regs16[REG_BP].toInt() and 0xFFFF)
+            regs16[REG_BP] = ((regs16[REG_BP].toInt() and 0xFFFF) - width).toShort()
+            val offset = regs16[REG_BP].toInt() and 0xFFFF
+            val link = if (dword) readSegmentDword(REG_SS, offset) else readSegmentWord(REG_SS, offset)
             if (rollbackEnter()) return
-            push(link)
+            pushEnter(link)
             if (rollbackEnter()) return
             level++
         }
-        push(frameTemp)
+        pushEnter(frameTemp)
         if (rollbackEnter()) return
     }
-    regs16[REG_BP] = frameTemp.toShort()
+    if (dword) setReg32(REG_BP, frameTemp) else regs16[REG_BP] = frameTemp.toShort()
     regs16[REG_SP] = (
         (regs16[REG_SP].toInt() and 0xFFFF) - frameSize
         ).toShort()
@@ -311,14 +390,14 @@ internal fun Emulator8086.executeXlat55() {
     iW = true
     val bp = regs16[REG_BP].toInt() and 0xFFFF
     // Fault before SP←BP so a wrap at BP=FFFFh keeps the original SP.
-    if (wordOffsetFaults(bp)) {
-        raiseException(13)
+    if (if (operandSize32()) dwordOffsetFaults(bp) else wordOffsetFaults(bp)) {
+        raiseException(exceptionForWordAccess(REG_SS))
         return
     }
     regs16[REG_SP] = bp.toShort()
     val newBp = pop()
     if (pendingException >= 0) return
-    regs16[REG_BP] = newBp.toShort()
+    if (operandSize32()) setReg32(REG_BP, newBp) else regs16[REG_BP] = newBp.toShort()
 }
 
 internal fun Emulator8086.executeXlat56() {

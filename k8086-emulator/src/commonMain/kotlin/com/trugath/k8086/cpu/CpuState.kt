@@ -33,6 +33,13 @@ internal open class CpuState {
         conventionalMemoryEnd = value.coerceIn(64 * 1024, 0xA0000)
     }
 
+    /**
+     * When true, writes to the system ROM window (`F6000–FFFFF`) update backing
+     * RAM. Used by SingleStep harnesses that place code/stack in that range.
+     */
+    @JvmField
+    internal var allowRomWrites: Boolean = false
+
     /** Optional software 8087; when null, ESC opcodes are no-ops. */
     internal var mathCoprocessor: MathCoprocessor8087? = null
     internal val ioPorts = ByteArray(IO_PORT_COUNT)
@@ -110,6 +117,14 @@ internal open class CpuState {
     internal val gprHi = IntArray(8)
 
     /**
+     * 32-bit immediate scratch for ALU imm forms under 66h. [REG_SCRATCH] sits
+     * next to [REG_FS] in the register-file image, so writing imm32 as four
+     * consecutive bytes would clobber FS.
+     */
+    @JvmField
+    internal var imm32Scratch: Int = 0
+
+    /**
      * Mid-REP resume: next [Emulator8086.step] re-enters the string body without
      * re-fetching a REP prefix (so [prefixActive] is false between quanta and
      * Machine can deliver IRQ0). Cleared when the REP completes or faults.
@@ -124,6 +139,9 @@ internal open class CpuState {
     internal var repContinueExtra = 0
     @JvmField
     internal var repContinueIW = false
+    /** 66h operand-size was active on the suspended string body (MOVSD/etc.). */
+    @JvmField
+    internal var repContinueOperandSize = false
     @JvmField
     internal var repContinueRepMode = 0
     @JvmField

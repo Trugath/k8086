@@ -7,6 +7,7 @@ package com.trugath.k8086.cpu
 
 /** Write instruction bytes to memory at current CS:IP. */
 internal fun Emulator8086.writeInstruction(bytes: ByteArray) {
+    flushInstructionPrefetch() // Host replaces the instruction for an isolated test probe.
     val addr = segreg(REG_CS, REG_ZERO, regIp)
     for (i in bytes.indices) {
         if (addr + i < RAM_SIZE) guestWrite8(addr + i, bytes[i].toInt())

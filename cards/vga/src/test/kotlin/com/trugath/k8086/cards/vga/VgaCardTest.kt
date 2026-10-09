@@ -37,6 +37,15 @@ class VgaCardTest {
     }
 
     @Test
+    fun attachSeedsBdaForTextMode() {
+        val (host, _) = attachHeadless()
+        assertEquals(0x03, host.cpuRead8(0x449))
+        assertEquals(80, host.cpuRead8(0x44A))
+        assertEquals(0x00, host.cpuRead8(0x450))
+        assertEquals(0x00, host.cpuRead8(0x451))
+    }
+
+    @Test
     fun softMode13hSetsCoreAndBda() {
         val (host, card) = attachHeadless()
         host.ioWrite(VgaBiosRom.SOFT_MODE_PORT, 0x13)
@@ -46,6 +55,21 @@ class VgaCardTest {
         assertEquals(0x13, host.cpuRead8(0x449))
         assertEquals(40, host.cpuRead8(0x44A))
         assertEquals(0x13, host.ioRead(VgaBiosRom.SOFT_MODE_PORT))
+    }
+
+    @Test
+    fun mode13TeletypeDrawsGlyphsIntoVram() {
+        val (host, card) = attachHeadless()
+        host.ioWrite(VgaBiosRom.SOFT_MODE_PORT, 0x13)
+        host.ioWrite(VgaBiosRom.SOFT_ATTR_PORT, 0x0F)
+        host.ioWrite(VgaBiosRom.SOFT_TTY_PORT, 'A'.code)
+        // 'A' is non-empty in the CGA font — at least one chain-4 plane byte lit.
+        var lit = 0
+        for (p in 0 until 4) {
+            for (b in card.core.planes[p]) if (b.toInt() != 0) lit++
+        }
+        assertTrue(lit > 0, "mode-13 teletype should paint glyphs into VRAM")
+        assertEquals(1, host.cpuRead8(0x450)) // cursor advanced one column
     }
 
     @Test

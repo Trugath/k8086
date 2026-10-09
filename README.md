@@ -178,11 +178,12 @@ Screenshots under `docs/screenshots/` are refreshed with
 Integration tests that boot rmDOS (`BootIntegrationTest`, `WarmBootCadFromDosTest`)
 need `roms/` and `disks/fd.img` present; they skip when assets are missing.
 
-### Hardware-generated 8086 / 8088 / 80286 conformance tests (optional)
+### Hardware-generated 8086 / 8088 / 80286 / 80386 conformance tests (optional)
 
 The [SingleStepTests/8086](https://github.com/SingleStepTests/8086),
-[SingleStepTests/8088](https://github.com/SingleStepTests/8088), and
-[SingleStepTests/80286](https://github.com/SingleStepTests/80286) corpora are pinned
+[SingleStepTests/8088](https://github.com/SingleStepTests/8088),
+[SingleStepTests/80286](https://github.com/SingleStepTests/80286), and
+[SingleStepTests/80386](https://github.com/SingleStepTests/80386) corpora are pinned
 as Git submodules (MIT; see [NOTICE](NOTICE)). **Not required** to build or run the
 emulator. The 8088 corpus is multi-gigabyte.
 
@@ -207,6 +208,7 @@ instead; all share one instruction engine (`CpuModel`).
 ./gradlew :k8086-emulator:singleStep8086Test
 ./gradlew :k8086-emulator:singleStep8088Test
 ./gradlew :k8086-emulator:singleStep80286Test
+./gradlew :k8086-emulator:singleStep80386Test
 ```
 
 Smoke preset (useful in PR CI):
@@ -233,3 +235,12 @@ listed RAM. Prefetch queue state and bus cycles are not validated.
 
 The 80286 runner uses the `v1_real_mode` **MOO** corpus (HALT-terminated vectors,
 revocation list), with the same state-level scope.
+
+The 80386 runner uses the `v1_ex_real_mode` MOO corpus and checks architectural
+instruction state with count-dependent undefined-flag masks. Nine known EX
+IDIV captures require architectural divide error; six captures with unresolved
+EX peripheral state appear as named skips. For a separate strict comparison
+with the raw EX hardware results, run
+`./gradlew :k8086-emulator:singleStep386ExHardwareTest` (currently fifteen known failures). See
+[CPU conformance notes](docs/cpu-conformance.md) for specification references
+and the remaining 386EX capture differences.

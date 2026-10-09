@@ -69,6 +69,8 @@ class CpuPerformanceTest {
         assumeTrue(threadMx != null && threadMx.isThreadAllocatedMemorySupported)
         threadMx!!.isThreadAllocatedMemoryEnabled = true
         val threadId = Thread.currentThread().threadId()
+        // Initialize the allocation counter before taking the baseline.
+        threadMx.getThreadAllocatedBytes(threadId)
 
         val gcBeans = ManagementFactory.getGarbageCollectorMXBeans()
         val gcCountBefore = gcBeans.sumOf { it.collectionCount.coerceAtLeast(0) }
@@ -129,7 +131,8 @@ class CpuPerformanceTest {
         cpu.setReg16(REG_SS, 0x2000)
         cpu.setReg16(REG_SP, 0xFFFE)
         cpu.setReg16(REG_AX, 0x1234)
-        cpu.setReg16(REG_BX, 0x0100)
+        // Keep MOV [BX], AX away from the code at DS:0100.
+        cpu.setReg16(REG_BX, 0x0400)
         cpu.setReg16(REG_CX, 0x0003)
         cpu.setReg16(REG_DX, 0x0000)
         cpu.setReg16(REG_SI, 0x0200)
@@ -169,6 +172,7 @@ class CpuPerformanceTest {
             }
         }
     }
+
 
     companion object {
         private const val ENABLED_PROPERTY = "k8086.cpuPerf.enabled"

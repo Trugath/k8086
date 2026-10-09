@@ -13,14 +13,14 @@ internal class I80286Extensions(private val cpu: Emulator80286) {
     fun execute0FEscape() {
         // Second opcode byte at CS:IP+1; baseInstSize is 0 so we own IP updates.
         val ip = cpu.getIp()
-        val op2 = cpu.readPhysByte(csIp(ip + 1))
+        val op2 = cpu.instructionRead8(ip + 1)
         when (op2) {
             0x06 -> { // CLTS
                 machineStatusWord = machineStatusWord and Emulator80286.MSW_TS.inv()
-                cpu.setIp((ip + 2) and 0xFFFF)
+                cpu.regIp = (ip + 2) and 0xFFFF
             }
             0x01 -> { // LGDT/SGDT/LIDT/SIDT/SMSW/LMSW group
-                val modrm = cpu.readPhysByte(csIp(ip + 2))
+                val modrm = cpu.instructionRead8(ip + 2)
                 val reg = (modrm shr 3) and 7
                 val mod = modrm shr 6
                 val rm = modrm and 7
@@ -29,17 +29,17 @@ internal class I80286Extensions(private val cpu: Emulator80286) {
                 if (mod != 3) {
                     when {
                         mod == 0 && rm == 6 -> {
-                            disp = cpu.readPhysByte(csIp(ip + 3)) or
-                                (cpu.readPhysByte(csIp(ip + 4)) shl 8)
+                            disp = cpu.instructionRead8(ip + 3) or
+                                (cpu.instructionRead8(ip + 4) shl 8)
                             consumed += 2
                         }
                         mod == 1 -> {
-                            disp = cpu.readPhysByte(csIp(ip + 3)).toByte().toInt()
+                            disp = cpu.instructionRead8(ip + 3).toByte().toInt()
                             consumed += 1
                         }
                         mod == 2 -> {
-                            disp = cpu.readPhysByte(csIp(ip + 3)) or
-                                (cpu.readPhysByte(csIp(ip + 4)) shl 8)
+                            disp = cpu.instructionRead8(ip + 3) or
+                                (cpu.instructionRead8(ip + 4) shl 8)
                             consumed += 2
                         }
                     }
@@ -76,15 +76,13 @@ internal class I80286Extensions(private val cpu: Emulator80286) {
                         // Other 0F 01 forms (descriptor table ops) not implemented in real-mode pass.
                     }
                 }
-                cpu.setIp((ip + consumed) and 0xFFFF)
+                cpu.regIp = (ip + consumed) and 0xFFFF
             }
             else -> {
                 // Unimplemented escape: skip the two-byte opcode.
-                cpu.setIp((ip + 2) and 0xFFFF)
+                cpu.regIp = (ip + 2) and 0xFFFF
             }
         }
     }
 
-    private fun csIp(ip: Int): Int =
-        cpu.physicalAddress((cpu.getReg16(REG_CS) shl 4) + (ip and 0xFFFF))
 }

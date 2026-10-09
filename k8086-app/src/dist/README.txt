@@ -15,7 +15,7 @@ Linux / macOS:  ./run.sh
 
 Run (CLI / headless)
 --------------------
-Windows:  run-cli.bat disks\fd.img --headless --quiet --cga-expect A:>
+Windows (cmd.exe): run-cli.bat disks\fd.img --headless --quiet --cga-expect "A:>"
 Linux / macOS:  ./run-cli.sh disks/fd.img --headless --quiet --cga-expect 'A:>'
 
 Included assets

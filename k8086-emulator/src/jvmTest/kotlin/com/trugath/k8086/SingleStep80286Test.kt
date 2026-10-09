@@ -123,6 +123,7 @@ class SingleStep80286Test {
 
         val cpu = Emulator80286()
         cpu.conventionalMemoryEnd = 0xA0000
+        cpu.allowRomWrites = true
         REGISTER_IDS.forEach { (name, id) ->
             cpu.setReg16(id, initialRegs.getValue(name))
         }
@@ -168,7 +169,9 @@ class SingleStep80286Test {
         }
 
         val flagAddr = vector.exception?.flagAddress?.and(ADDRESS_MASK) ?: -1
-        val flagAddrHi = if (flagAddr >= 0) (flagAddr and 0xFF0000) or (((flagAddr and 0xFFFF) + 1) and 0xFFFF) else -1
+        // MOO supplies a physical address, not a segment offset. A valid
+        // FLAGS word may cross a physical 64 KiB boundary without wrapping.
+        val flagAddrHi = if (flagAddr >= 0) (flagAddr + 1) and ADDRESS_MASK else -1
 
         if (flagAddr >= 0 && flagsMask != 0xFFFF) {
             val expectedWord =

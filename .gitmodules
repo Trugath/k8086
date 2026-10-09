@@ -8,3 +8,6 @@
 [submodule "testdata/80286"]
 	path = testdata/80286
 	url = https://github.com/SingleStepTests/80286.git
+[submodule "testdata/80386"]
+	path = testdata/80386
+	url = https://github.com/SingleStepTests/80386.git

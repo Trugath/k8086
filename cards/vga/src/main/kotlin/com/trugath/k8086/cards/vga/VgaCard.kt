@@ -84,6 +84,11 @@ class VgaCard(
         require(romBase and 0x7FF == 0) { "VGA ROM base must be 2K-aligned" }
 
         core.setMode03h()
+        // No motherboard CGA → nothing else seeds BDA 40:49/4A/4C before DOS CON
+        // uses them for cursor math. Keep in sync with mode 03h defaults.
+        writeBdaMode(0x03, columns = 80, pageSize = 0x1000)
+        host.cpuWrite8(0x450, 0)
+        host.cpuWrite8(0x451, 0)
 
         host.mapOptionRom(VgaBiosRom.build(), romBase)
         host.mapMemory(
@@ -102,7 +107,8 @@ class VgaCard(
                 0x8000,
                 object : MemoryDevice {
                     override fun memReadByte(offset: Int): Int = core.textMemRead(offset)
-                    override fun memWriteByte(offset: Int, value: Int) = core.textMemWrite(offset, value)
+                    override fun memWriteByte(offset: Int, value: Int) =
+                        core.textMemWrite(offset, value)
                 },
             ),
         )
@@ -131,10 +137,18 @@ class VgaCard(
             core.tickCpuCycles(cycles)
             // Keep BDA 40:49 aligned when games reprogram CRTC after INT10 mode set
             // (or when something clobbers low memory after we wrote the mode).
-            if (core.biosMode == 0x13) {
-                val h = host
-                if (h != null && (h.cpuRead8(0x449) and 0xFF) != 0x13) {
-                    writeBdaMode(0x13, columns = 40, pageSize = 0xFA00)
+            // Keep BDA 40:49 aligned with the adapter after INT10 / low-memory clobber.
+            val h = host
+            if (h != null) {
+                when {
+                    core.biosMode == 0x13 -> {
+                        if ((h.cpuRead8(0x449) and 0xFF) != 0x13) {
+                            writeBdaMode(0x13, columns = 40, pageSize = 0xFA00)
+                        }
+                    }
+                    core.isTextMode() && (h.cpuRead8(0x44A) and 0xFF) == 0 -> {
+                        writeBdaMode(core.biosMode and 0xFF, columns = 80, pageSize = 0x1000)
+                    }
                 }
             }
             // Mark dirty sparingly — Swing timer (~60 Hz) does the expensive compose.

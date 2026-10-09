@@ -22,11 +22,12 @@ CGA text rendering. See also `CgaFont.kt`.
 
 SingleStepTests (optional Git submodules)
 -----------------------------------------
-`testdata/8086`, `testdata/8088`, and `testdata/80286` are Git submodules of
-[SingleStepTests](https://github.com/SingleStepTests) hardware-generated CPU
-conformance corpora (MIT License, Copyright Daniel Balsom and contributors).
-They are not required to build or run the emulator; initialize them only when
-running the `singleStep*` Gradle tasks. The 8088 corpus is large (multi-GB).
+`testdata/8086`, `testdata/8088`, `testdata/80286`, and `testdata/80386` are
+Git submodules of [SingleStepTests](https://github.com/SingleStepTests)
+hardware-generated CPU conformance corpora (MIT License, Copyright Daniel
+Balsom and contributors). They are not required to build or run the emulator;
+initialize them only when running the `singleStep*` Gradle tasks. The 8088
+corpus is large (multi-GB).
 
 Jackson Databind (test dependency)
 ----------------------------------
