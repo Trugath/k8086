@@ -107,7 +107,7 @@ object VgaBiosRom {
         // AH=0Eh teletype
         a.emit(0x80, 0xFC, 0x0E)
         a.jne("not_0e")
-        a.emit(0x50, 0x52, 0x53) // push ax,dx,bx
+        a.emit(0x53, 0x52, 0x50) // push bx,dx,ax: character must be on top
         a.emit(0xBA); a.emitWord(SOFT_ATTR_PORT)
         a.emit(0x88, 0xD8) // mov al,bl
         a.emit(0xEE)
@@ -115,7 +115,7 @@ object VgaBiosRom {
         a.emit(0x50) // push ax again
         a.emit(0xBA); a.emitWord(SOFT_TTY_PORT)
         a.emit(0xEE)
-        a.emit(0x5B, 0x5A, 0x58)
+        a.emit(0x58, 0x5A, 0x5B) // pop ax,dx,bx
         a.emit(0xCF)
         a.label("not_0e")
 
