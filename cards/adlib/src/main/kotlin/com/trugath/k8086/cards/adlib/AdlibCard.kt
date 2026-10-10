@@ -78,7 +78,8 @@ class AdlibCard(
 
     private val line: SourceDataLine? = if (enableAudio) openLine() else null
     private var sampleAccum = 0.0
-    private val buf = ByteArray(256)
+    private var samplesPerCpuCycle = SAMPLE_RATE / CPU_HZ_DEFAULT
+    private val buf = ByteArray(512) // 256 signed 16-bit mono samples
     private var bufPos = 0
 
     private var attachedHost: IsaHost? = null
@@ -89,6 +90,7 @@ class AdlibCard(
     override fun attach(host: IsaHost) {
         attachedHost = host
         val cpuHz = host.realtimeCpuHz().takeIf { it.isFinite() && it > 0.0 } ?: CPU_HZ_DEFAULT
+        samplesPerCpuCycle = SAMPLE_RATE / cpuHz
         timer1PeriodCycles = cpuHz * 80e-6
         timer2PeriodCycles = cpuHz * 320e-6
         val device = object : IoDevice {
@@ -162,11 +164,10 @@ class AdlibCard(
         val out = line ?: return
         // Turbo must not touch the audio device — write() blocks and paces the CPU.
         if (attachedHost?.isAudioOutputSuspended() == true) return
-        val muted = attachedHost?.isAudioMuted() == true
-        val cpuHz = attachedHost?.realtimeCpuHz()?.takeIf { it > 0.0 } ?: CPU_HZ_DEFAULT
-        sampleAccum += cpuCycles * (SAMPLE_RATE / cpuHz)
+        sampleAccum += cpuCycles * samplesPerCpuCycle
         var n = sampleAccum.toInt()
         if (n <= 0) return
+        val muted = attachedHost?.isAudioMuted() == true
         sampleAccum -= n
         // Cap work per tick — a huge REP cycle dump must not starve the CPU loop.
         if (n > 512) {
@@ -174,9 +175,12 @@ class AdlibCard(
             n = 512
         }
         while (n-- > 0) {
-            val sample = if (muted) 0 else opl.renderSample8()
-            // Unsigned 8-bit: midpoint 0x80 is silence. Always write so mute does not underrun.
-            buf[bufPos++] = (sample + 128).toByte()
+            // Muting the output must not freeze oscillator/envelope state.
+            val rendered = (opl.renderSample() * 32767.0).toInt().coerceIn(-32768, 32767)
+            val sample = if (muted) 0 else rendered
+            // Signed little-endian PCM preserves quiet instruments and release tails.
+            buf[bufPos++] = sample.toByte()
+            buf[bufPos++] = (sample shr 8).toByte()
             if (bufPos == buf.size) {
                 // Never block the emu thread — overproducing (wrong Hz) or a full
                 // buffer would freeze VGA presents while PCM keeps draining.
@@ -193,11 +197,11 @@ class AdlibCard(
     fun anyKeyOn(): Boolean = opl.anyKeyOn()
 
     private fun openLine(): SourceDataLine? = try {
-        val format = AudioFormat(SAMPLE_RATE.toFloat(), 8, 1, false, false)
+        val format = AudioFormat(SAMPLE_RATE.toFloat(), 16, 1, true, false)
         val info = javax.sound.sampled.DataLine.Info(SourceDataLine::class.java, format)
         if (!AudioSystem.isLineSupported(info)) null
         else AudioSystem.getLine(info).also {
-            (it as SourceDataLine).open(format, 4096)
+            (it as SourceDataLine).open(format, 8192)
             it.start()
         } as SourceDataLine
     } catch (_: Exception) {

@@ -13,13 +13,17 @@ import com.trugath.k8086.platform.HostPlatform
 internal class RealtimePacer(
     private val cpuHz: Double = CPU_HZ_8088,
     private val sliceCycles: Int = SLICE_CYCLES,
+    private val nanoTime: () -> Long = HostPlatform::nanoTime,
+    private val sleepNanos: (Long) -> Unit = HostPlatform::sleepNanos,
 ) {
     private var cycles = 0L
-    private var anchorNs = HostPlatform.nanoTime()
+    private var nextCheckCycles = sliceCycles.toLong()
+    private var anchorNs = nanoTime()
 
     fun reset() {
         cycles = 0
-        anchorNs = HostPlatform.nanoTime()
+        nextCheckCycles = sliceCycles.toLong()
+        anchorNs = nanoTime()
     }
 
     /**
@@ -29,18 +33,19 @@ internal class RealtimePacer(
     fun addCycles(n: Int, keepGoing: () -> Boolean = { true }) {
         if (n <= 0) return
         cycles += n.toLong()
-        if (cycles < sliceCycles) return
+        if (cycles < nextCheckCycles) return
+        nextCheckCycles = cycles + sliceCycles
 
         val targetNs = (cycles * NANOS_PER_SECOND / cpuHz).toLong()
-        var ahead = targetNs - (HostPlatform.nanoTime() - anchorNs)
+        var ahead = targetNs - (nanoTime() - anchorNs)
         if (ahead < -CATCH_UP_NS) {
             reset()
             return
         }
         while (ahead > MIN_SLEEP_NS && keepGoing()) {
             val chunk = minOf(ahead, MAX_SLEEP_CHUNK_NS)
-            HostPlatform.sleepNanos(chunk)
-            ahead = targetNs - (HostPlatform.nanoTime() - anchorNs)
+            sleepNanos(chunk)
+            ahead = targetNs - (nanoTime() - anchorNs)
         }
 
         if (cycles > (cpuHz / 2).toLong()) {

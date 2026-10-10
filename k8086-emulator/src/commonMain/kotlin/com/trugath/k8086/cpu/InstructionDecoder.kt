@@ -10,6 +10,7 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
     // Functional 386 prefetch model. Bus-cycle scheduling is not modeled.
     // Instruction bytes already fetched survive stores; data reads bypass this queue.
     private val prefetched = ByteArray(16)
+    private var prefetchHead = 0
     private var prefetchCs = -1
     private var prefetchIp = 0
     private var prefetchCount = 0
@@ -18,6 +19,7 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
     fun flushPrefetch() {
         prefetchCs = -1
         prefetchCount = 0
+        prefetchHead = 0
         sequentialIp = -1
     }
 
@@ -27,8 +29,9 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         val consumed = ip - prefetchIp
         if (cs != prefetchCs || ip != sequentialIp || consumed !in 0..prefetchCount) {
             prefetchCount = 0
+            prefetchHead = 0
         } else {
-            for (i in consumed until prefetchCount) prefetched[i - consumed] = prefetched[i]
+            prefetchHead = (prefetchHead + consumed) and 15
             prefetchCount -= consumed
         }
         prefetchCs = cs
@@ -36,7 +39,9 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         val capacity = minOf(prefetched.size, 0x10000 - ip)
         while (prefetchCount < capacity) {
             val phys = ((cs shl 4) + ip + prefetchCount) and cpu.physicalAddressMask
-            prefetched[prefetchCount++] = fetchCodeByte(cpu.mem, cpu.conventionalMemoryEnd, phys).toByte()
+            prefetched[(prefetchHead + prefetchCount) and 15] =
+                fetchCodeByte(cpu.mem, cpu.conventionalMemoryEnd, phys).toByte()
+            prefetchCount++
         }
     }
 
@@ -44,7 +49,7 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         val off = offset and 0xFFFF
         val index = off - prefetchIp
         if (cpu.has386Prefixes && cpu.reg16u(REG_CS) == prefetchCs && index in 0 until prefetchCount) {
-            return prefetched[index].toInt() and 0xFF
+            return prefetched[(prefetchHead + index) and 15].toInt() and 0xFF
         }
         val phys = ((cpu.reg16u(REG_CS) shl 4) + off) and cpu.physicalAddressMask
         return fetchCodeByte(cpu.mem, cpu.conventionalMemoryEnd, phys)
@@ -280,13 +285,17 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         val opcodeByte = cpu.rawOpcodeId
         val grp3Reg = cpu.iReg
         val grp3Word = cpu.iW
+        val timingDword = cpu.operandSizeOverrideEn != 0
         val grp3Mem = modSize > 0 && cpu.iMod != 3
         // Handlers can advance IP while consuming immediates. Capture SIB length
         // while IP still points at the opcode, rather than rereading later bytes.
         val addressBytes = if (modSize > 0 && cpu.iMod < 3 && cpu.addressSizeOverrideEn != 0) {
             cpu.modRm32ExtraBytes()
         } else -1
-        if (cpu.has386Prefixes) sequentialIp = (ip + encodingLengthBytes(opcode0)) and 0xFFFF
+        val encodingLength = if (cpu.has386Prefixes || cpu.maxInsnBytes != Int.MAX_VALUE) {
+            encodingLengthBytes(opcodeByte)
+        } else 0
+        if (cpu.has386Prefixes) sequentialIp = (ip + encodingLength) and 0xFFFF
 
         // 386 LOCK #UD before execute (8086/286 leave lockPrefixRaisesUd false).
         // Only the final opcode is checked — further prefixes (seg/66/67/REP) are fine.
@@ -301,7 +310,6 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
             // Address decoding may already have queued a segment fault.
             cpu.pendingException = 6
         } else if (cpu.maxInsnBytes != Int.MAX_VALUE) {
-            val encodingLength = encodingLengthBytes(opcodeByte)
             val totalLen = cpu.instructionPrefixBytes + encodingLength
             val insnStart = (cpu.regIp - cpu.instructionPrefixBytes) and 0xFFFF
             if (totalLen > cpu.maxInsnBytes || insnStart + totalLen > 0x10000 ||
@@ -323,6 +331,8 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         }
         cpu.lastInstructionCycles = if (cpu.cycleOverride != CYCLE_OVERRIDE_NONE) {
             cpu.cycleOverride
+        } else if (cpu.has386Prefixes) {
+            CycleTables.cycles386(opcodeByte, grp3Reg, grp3Word, grp3Mem, timingDword)
         } else if (opcodeByte == 0xF6 || opcodeByte == 0xF7) {
             CycleTables.grp3Cycles(grp3Reg, word = grp3Word, memory = grp3Mem)
         } else {
@@ -466,6 +476,7 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
         cpu.iMod = 0
 
         val opcodeByte = cpu.rawOpcodeId and 0xFF
+        cpu.repTimingContinuation = true
         when (cpu.xlatOpcodeId) {
             17 -> cpu.executeXlat17()
             18 -> cpu.executeXlat18()
@@ -475,6 +486,7 @@ internal class InstructionDecoder(private val cpu: Emulator8086) {
                 cpu.suppressIpAdvance = false
             }
         }
+        cpu.repTimingContinuation = false
 
         cpu.lastOpcodeByte = opcodeByte
         cpu.lastInstructionCycles = if (cpu.cycleOverride != CYCLE_OVERRIDE_NONE) {

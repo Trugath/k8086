@@ -5,6 +5,21 @@ import org.junit.jupiter.api.Test
 
 class RealtimePacerTest {
     @Test
+    fun clockChecksRemainBatchedAfterFirstSlice() {
+        var reads = 0
+        var now = 0L
+        val pacer = RealtimePacer(cpuHz = 1_000_000.0, sliceCycles = 1_000,
+            nanoTime = { reads++; now }, sleepNanos = { now += it })
+        repeat(10_000) { pacer.addCycles(1) }
+        assertTrue(reads <= 31, "clock reads should scale with slices, got $reads")
+        assertTrue(now >= 9_500_000L, "batching must still pace all guest cycles")
+        pacer.reset()
+        val afterReset = reads
+        repeat(999) { pacer.addCycles(1) }
+        assertTrue(reads == afterReset, "reset must start a new complete slice")
+    }
+
+    @Test
     fun sleepsWhenAheadOfWallClock() {
         val pacer = RealtimePacer(sliceCycles = 5_000)
         val start = System.nanoTime()

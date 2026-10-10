@@ -18,7 +18,10 @@ internal fun Emulator8086.executeXlat0() {
         regIp += iData0.toByte().toInt()
     }
     // 8088: ~4 not taken / ~16 taken (flat table used 16 for both).
-    cycleOverride = if (taken) 16 else 4
+    cycleOverride = if (has386Prefixes) {
+        // 7+m taken / 3 not taken; use a coarse three-clock refill allowance.
+        if (taken) 10 else 3
+    } else if (taken) 16 else 4
 }
 
 internal fun Emulator8086.executeXlat13(iReg4bit: Int) {

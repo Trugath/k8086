@@ -14,6 +14,7 @@ import java.awt.event.WindowEvent
 import java.awt.image.BufferedImage
 import java.io.File
 import javax.swing.JButton
+import javax.swing.JLabel
 import javax.swing.JFileChooser
 import javax.swing.JFrame
 import javax.swing.JOptionPane
@@ -43,6 +44,8 @@ internal class VgaWindow(
     private var pauseBtn: JButton? = null
     private var turboBtn: JButton? = null
     private var audioBtn: JButton? = null
+    private var mouseCapture: VgaMouseCapture? = null
+    private var mouseStatus: JLabel? = null
 
     /** XT make codes currently held — Swing auto-repeats must not flood IRQ1. */
     private val pressedScanCodes = HashSet<Int>()
@@ -70,6 +73,12 @@ internal class VgaWindow(
             p.isFocusable = true
             p.addKeyListener(object : KeyAdapter() {
                 override fun keyPressed(e: KeyEvent) {
+                    if (e.keyCode == KeyEvent.VK_F12) {
+                        mouseCapture?.release()
+                        releaseAllKeys()
+                        e.consume()
+                        return
+                    }
                     val sc = scanCodeFor(e) ?: return
                     // Ignore OS auto-repeat: XT boards only send one make until break.
                     if (!pressedScanCodes.add(sc)) return
@@ -81,6 +90,9 @@ internal class VgaWindow(
                     controls?.enqueueKeyScanCode(sc or 0x80)
                 }
             })
+            mouseCapture = VgaMouseCapture(p, controls) { captured ->
+                mouseStatus?.text = if (captured) "Mouse captured ? F12 release" else "Mouse: click to capture"
+            }.also { it.install() }
             val bar = buildToolbar(p)
             toolbar = bar
             val root = JPanel(BorderLayout()).apply {
@@ -97,12 +109,16 @@ internal class VgaWindow(
                 setLocation(64, 64)
                 isVisible = true
                 packToVideo(this, p, bar)
+                addWindowListener(object : WindowAdapter() {
+                    override fun windowClosing(e: WindowEvent?) { mouseCapture?.release() }
+                })
                 addWindowFocusListener(object : WindowAdapter() {
                     override fun windowGainedFocus(e: WindowEvent?) {
                         controls?.setConsoleFocused(true)
                     }
                     override fun windowLostFocus(e: WindowEvent?) {
                         // Lost focus mid-hold would leave Keyboard[] stuck in Wolf.
+                        mouseCapture?.release()
                         releaseAllKeys()
                         controls?.setConsoleFocused(false)
                     }
@@ -173,6 +189,9 @@ internal class VgaWindow(
 
     fun close() {
         SwingUtilities.invokeLater {
+            mouseCapture?.release()
+            mouseCapture = null
+            mouseStatus = null
             releaseAllKeys()
             timer?.stop()
             timer = null
@@ -240,6 +259,9 @@ internal class VgaWindow(
                 left.add(btn)
             }
         }
+        mouseStatus = JLabel("Mouse: click to capture").apply {
+            toolTipText = "Click the video area to capture; F12 releases the mouse"
+        }.also { left.add(it) }
         bar.add(left, BorderLayout.CENTER)
 
         val right = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 4))

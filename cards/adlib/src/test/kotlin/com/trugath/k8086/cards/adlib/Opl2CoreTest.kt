@@ -8,6 +8,26 @@ import kotlin.test.assertTrue
 
 class Opl2CoreTest {
     @Test
+    fun fmOffsetsCarrierPhaseWithoutAccumulatingModulation() {
+        val opl = Opl2Core()
+        for (off in intArrayOf(0, 3)) {
+            opl.writeReg(0x20 + off, 0x21)
+            opl.writeReg(0x40 + off, 0)
+            opl.writeReg(0x60 + off, 0xF0)
+            opl.writeReg(0x80 + off, 0)
+        }
+        opl.writeReg(0xA0, 0xAE)
+        opl.writeReg(0xB0, 0x2B)
+        val increment = (0x3AE * 49716.0 / (1 shl (20 - 2))) / 22050.0 * Math.PI * 2
+        repeat(128) { i ->
+            val phase = increment * (i + 1)
+            val expected = kotlin.math.sin(phase + kotlin.math.sin(phase) * 8.0) * 0.12
+            assertTrue(abs(opl.renderSample() - expected) < 1e-10,
+                "FM should preserve base oscillator phase at sample $i")
+        }
+    }
+
+    @Test
     fun detectSequenceLeavesTimersWritable() {
         // Mirror SDL_DetectAdLib register traffic; synthesis core must accept it.
         val opl = Opl2Core()

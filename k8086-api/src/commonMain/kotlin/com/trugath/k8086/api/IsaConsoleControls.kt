@@ -23,6 +23,9 @@ interface IsaConsoleControls {
     /** XT make/break scan code into the keyboard buffer. */
     fun enqueueKeyScanCode(code: Int) {}
 
+    /** Relative Microsoft serial mouse motion (Y positive upwards), buttons: left=1/right=2. */
+    fun enqueueMouseEvent(dx: Int, dy: Int, buttons: Int) {}
+
     /** Drive speaker auto-mute when the console window loses focus. */
     fun setConsoleFocused(focused: Boolean) {}
 }

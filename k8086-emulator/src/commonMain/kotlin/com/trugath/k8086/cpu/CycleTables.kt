@@ -12,6 +12,54 @@ package com.trugath.k8086.cpu
  * PIT channel 2, so a flat F7=70 for MUL r16 (~118–133 real) reports MHz high.
  */
 internal object CycleTables {
+    /**
+     * Real-address 386 timings for common integer instructions. Intel's 1986
+     * Programmer's Reference, chapter 17:
+     * https://pdos.csail.mit.edu/6.1810/2018/readings/i386/c17.htm
+     * Multiply uses the published upper bound (early-out is not modeled).
+     * Branch refill, bus wait states and uncommon/system opcodes remain coarse.
+     */
+    fun cycles386(op: Int, reg: Int, word: Boolean, memory: Boolean, dword: Boolean): Int {
+        if (op in 0x00..0x3D && (op and 7) <= 5) {
+            if (!memory || (op and 7) >= 4) return 2
+            return if ((op and 2) != 0) 6 else if (op >= 0x38) 5 else 7
+        }
+        return when (op) {
+            in 0x40..0x4F -> 2
+            in 0x50..0x57, 0x06, 0x0E, 0x16, 0x1E, 0x68, 0x6A -> 2
+            in 0x58..0x5F -> 4
+            0x07, 0x17, 0x1F -> 7
+            in 0x70..0x7F -> 3 // taken branches override this
+            in 0x80..0x83 -> if (!memory) 2 else if (reg == 7) 5 else 7
+            0x84, 0x85 -> if (memory) 5 else 2
+            0x86, 0x87 -> if (memory) 5 else 3
+            0x88, 0x89, 0x8C, 0x8D, 0xC6, 0xC7 -> 2
+            0x8A, 0x8B -> if (memory) 4 else 2
+            0x8E -> if (memory) 5 else 2
+            0x8F -> if (memory) 5 else 4
+            0xA0, 0xA1 -> 4
+            0xA2, 0xA3, 0xA8, 0xA9 -> 2
+            0xA4, 0xA5 -> 7
+            0xA6, 0xA7 -> 10
+            0xAA, 0xAB -> 4
+            0xAC, 0xAD, 0xD7 -> 5
+            0xAE, 0xAF -> 7
+            in 0xB0..0xBF -> 2
+            0x69, 0x6B -> (if (op == 0x6B) 14 else if (dword) 38 else 22) + if (memory) 3 else 0
+            0xC0, 0xC1, in 0xD0..0xD3 ->
+                if (reg == 2 || reg == 3) (if (memory) 10 else 9) else if (memory) 7 else 3
+            0xF6, 0xF7 -> when (reg) {
+                0, 1 -> if (memory) 5 else 2
+                2, 3 -> if (memory) 6 else 2
+                4, 5 -> (if (!word) 14 else if (dword) 38 else 22) + if (memory) 3 else 0
+                6 -> (if (!word) 14 else if (dword) 38 else 22) + if (memory) 3 else 0
+                7 -> if (!word) 19 else if (dword) 43 else 27
+                else -> 2
+            }
+            else -> BASE[op] + if (memory) MEMORY_OPERAND_PENALTY else 0
+        }
+    }
+
     /** Base cycles for each primary opcode byte. */
     val BASE: IntArray = IntArray(256) { 8 }.also { t ->
         // Arithmetic / logic reg,r/m family 00–3F (even opcodes often shorter)

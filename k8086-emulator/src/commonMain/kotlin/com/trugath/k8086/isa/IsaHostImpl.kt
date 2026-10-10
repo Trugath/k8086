@@ -111,6 +111,8 @@ class IsaHostImpl(
         override fun toggleAudioMute() = machine.setAudioMuted(!machine.isAudioMuted())
         override fun isUserAudioMuted(): Boolean = machine.isAudioMuted()
         override fun enqueueKeyScanCode(code: Int) = machine.enqueueScanCode(code)
+        override fun enqueueMouseEvent(dx: Int, dy: Int, buttons: Int) =
+            machine.enqueueMouseEvent(dx, dy, buttons)
         override fun setConsoleFocused(focused: Boolean) = machine.setConsoleFocused(focused)
     }
 }

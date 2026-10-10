@@ -131,6 +131,7 @@ internal open class CpuState {
      */
     @JvmField
     internal var repContinue = false
+    internal var repTimingContinuation = false
     @JvmField
     internal var repContinueRawOpcode = 0
     @JvmField

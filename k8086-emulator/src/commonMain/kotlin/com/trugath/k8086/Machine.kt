@@ -412,7 +412,17 @@ class Machine(
                 openPrintPreview(job)
             }
         }
-        addTickable { _ -> parallel.pollIdle() }
+        // Print-job expiry needs millisecond polling, not a clock read and lock
+        // on every CPU instruction. Port writes are still handled immediately.
+        var parallelPollCycles = 0
+        val parallelPollInterval = (options.realtimeCpuHz / 100).toInt().coerceAtLeast(1)
+        addTickable { cycles ->
+            parallelPollCycles += cycles
+            if (parallelPollCycles >= parallelPollInterval) {
+                parallelPollCycles = 0
+                parallel.pollIdle()
+            }
+        }
 
         ioBus.map(shutdownPort, listOf(ShutdownPort.PORT), owner = "shutdown-port")
         ioBus.map(

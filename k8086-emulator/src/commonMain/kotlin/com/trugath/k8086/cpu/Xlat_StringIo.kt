@@ -13,6 +13,25 @@ package com.trugath.k8086.cpu
 
 // --- xlat opcode group: stringIo ---
 
+/** Count completed iterations, including the final partial REP quantum. */
+private fun Emulator8086.account386RepCycles(repeated: Boolean, iterations: Int) {
+    if (!has386Prefixes || !repeated) return
+    val per = when (rawOpcodeId and 0xFF) {
+        0xA4, 0xA5 -> 4
+        0xA6, 0xA7 -> 9
+        0xAA, 0xAB -> 5
+        0xAC, 0xAD -> 5
+        0xAE, 0xAF -> 8
+        0x6C, 0x6D -> 6
+        0x6E, 0x6F -> 12
+        else -> return
+    }
+    // The separately executed REP prefix already costs two clocks. Charge
+    // the remaining setup once, rather than on every interruptible quantum.
+    val setup = if (repTimingContinuation) 0 else if (rawOpcodeId in 0x6C..0x6D) 11 else 3
+    cycleOverride = (setup + per * iterations).coerceAtLeast(1)
+}
+
 /** Arm mid-REP resume; decoder suppresses IP advance and clears prefix holds. */
 internal fun Emulator8086.armRepContinue(itersDone: Int) {
     repContinue = true
@@ -129,13 +148,14 @@ internal fun Emulator8086.executeXlat17() {
 
         if (!sourceIsAccumulator) indexInc(REG_SI)
         if (!destinationIsAccumulator) indexInc(REG_DI)
-        if (!rep) break
         iters++
+        if (!rep) break
         if (shouldYieldRep(iters)) {
             armRepContinue(iters)
             break
         }
     }
+    account386RepCycles(rep, iters)
 }
 
 internal fun Emulator8086.executeXlat18() {
@@ -203,12 +223,12 @@ internal fun Emulator8086.executeXlat18() {
 
         if (extra == 0) indexInc(REG_SI)
         indexInc(REG_DI)
+        iters++
 
         if (rep) {
             val keepGoing = (regs16[REG_CX].toInt() and 0xFFFF) != 0 &&
                 (opResult == 0) == (repMode != 0)
             if (!keepGoing) break
-            iters++
             if (shouldYieldRep(iters)) {
                 armRepContinue(iters)
                 break
@@ -217,7 +237,7 @@ internal fun Emulator8086.executeXlat18() {
             break
         }
     }
-
+    account386RepCycles(rep, iters)
 }
 
 internal fun Emulator8086.executeXlat21() {
@@ -317,12 +337,13 @@ internal fun Emulator8086.executeInsOuts() {
         }
         if (pendingException >= 0) break
         indexInc(indexReg)
-        if (!rep) break
         iters++
+        if (!rep) break
         // Yield REP INS/OUTS only with IF=1; CLI disk paths must not split.
         if (shouldYieldRep(iters)) {
             armRepContinue(iters)
             break
         }
     }
+    account386RepCycles(rep, iters)
 }

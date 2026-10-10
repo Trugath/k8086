@@ -114,7 +114,12 @@ class ExampleCardsTest {
         statusPort.ioWriteByte(0x388, 0x04)
         dataPort.ioWriteByte(0x389, 0x01) // enable timer 1
 
-        machine.tickDevices(80)
+        // Timer 1 counts 80 microseconds, rather than 80 guest CPU cycles.
+        val periodCycles = kotlin.math.ceil(machine.realtimeCpuHz() * 80e-6).toInt()
+        machine.tickDevices(periodCycles - 1)
+        assertEquals(0, statusPort.ioReadByte(0x388) and 0xC0,
+            "timer-1 must not expire before 80 microseconds")
+        machine.tickDevices(1)
 
         val status = statusPort.ioReadByte(0x388)
         assertTrue((status and 0xC0) == 0xC0, "timer-1 expiry should set IRQ+T1 bits, status=$status")

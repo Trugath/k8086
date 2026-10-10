@@ -17,6 +17,17 @@ class Opl2Core(
     private val chans = Array(9) { Channel() }
     private var waveformSelect = false
     private var rhythm = false
+    private var vibratoPhase = 0.0
+    private var tremoloPhase = 0.0
+    private var vibratoFactor = 1.0
+    private var tremoloDb = 0.0
+    private val attackFactors = DoubleArray(64) { rate ->
+        val ms = ATTACK_MS[rate]
+        if (ms == 0.0) 0.0 else kotlin.math.exp(kotlin.math.ln(0.01 / 96.0) / (ms * sampleRate / 1000.0))
+    }
+    private val decaySteps = DoubleArray(64) { rate ->
+        if (rate < 4) 0.0 else 96.0 / (DECAY_MS[rate] * sampleRate / 1000.0)
+    }
 
     /** Write an OPL register (index already latched by the card). */
     fun writeReg(index: Int, value: Int) {
@@ -25,6 +36,7 @@ class Opl2Core(
         regs[i] = v
         when {
             i == 0x01 -> waveformSelect = (v and 0x20) != 0
+            i == 0x08 -> for (c in 0..8) refreshChannel(c)
             i == 0xBD -> {
                 val was = rhythm
                 rhythm = (v and 0x20) != 0
@@ -57,15 +69,19 @@ class Opl2Core(
 
     /** One mono sample in roughly -1..1. */
     fun renderSample(): Double {
+        vibratoPhase = (vibratoPhase + 6.4 / sampleRate) % 1.0
+        tremoloPhase = (tremoloPhase + 3.7 / sampleRate) % 1.0
+        val cents = if ((regs[0xBD] and 0x40) != 0) 14.0 else 7.0
+        vibratoFactor = Math.pow(2.0, kotlin.math.sin(vibratoPhase * Math.PI * 2) * cents / 1200.0)
+        val depth = if ((regs[0xBD] and 0x80) != 0) 4.8 else 1.0
+        tremoloDb = (1.0 - kotlin.math.abs(tremoloPhase * 2 - 1.0)) * depth
         var mix = 0.0
         val melodicEnd = if (rhythm) 6 else 9
         for (c in 0 until melodicEnd) {
             mix += renderChannel(c)
         }
         if (rhythm) {
-            for (c in 6..8) {
-                if (chans[c].keyOn) mix += renderChannel(c)
-            }
+            for (c in 6..8) mix += renderChannel(c)
         }
         return (mix * 0.12).coerceIn(-1.0, 1.0)
     }
@@ -79,11 +95,11 @@ class Opl2Core(
         val car = ops[SLOT_CAR[c]]
         if (!ch.keyOn && mod.env == EnvState.OFF && car.env == EnvState.OFF) return 0.0
 
-        val phaseInc = phaseIncrement(ch.fnum, ch.block)
+        val phaseInc = ch.phaseInc
 
         // Modulator
         val fb = if (ch.feedback > 0) {
-            (mod.prevOut + mod.prevOut2) * FEEDBACK_SCALE[ch.feedback]
+            (mod.prevOut + mod.prevOut2) * 0.5 * FEEDBACK_SCALE[ch.feedback]
         } else {
             0.0
         }
@@ -103,16 +119,20 @@ class Opl2Core(
         tickEnvelope(op)
         if (op.env == EnvState.OFF) return 0.0
         val mult = MULT_TABLE[op.mult]
-        op.phase += baseInc * mult + phaseMod * 8.0
+        op.phase += baseInc * mult * if (op.vib) vibratoFactor else 1.0
         // Keep phase in a wide range then wrap via table index
         if (op.phase > 1e6 || op.phase < -1e6) op.phase %= (Math.PI * 2.0)
         while (op.phase >= Math.PI * 2.0) op.phase -= Math.PI * 2.0
         while (op.phase < 0.0) op.phase += Math.PI * 2.0
 
-        val wave = waveform(op.wave, op.phase)
-        val env = op.envLevel // 0..1
-        val tl = (1.0 - op.tl / 63.0).coerceIn(0.0, 1.0)
-        return wave * env * tl
+        // FM is a phase offset for this sample, not a change to the oscillator's
+        // accumulated phase. Integrating it changes pitch and instrument timbre.
+        var outputPhase = (op.phase + phaseMod * 8.0) % (Math.PI * 2.0)
+        if (outputPhase < 0.0) outputPhase += Math.PI * 2.0
+        val wave = waveform(op.wave, outputPhase)
+        val attenuation = op.attenuation + if (op.am) tremoloDb else 0.0
+        val env = ENVELOPE_GAIN[(attenuation * 16).toInt().coerceIn(0, ENVELOPE_GAIN.lastIndex)]
+        return wave * env * op.levelGain
     }
 
     private fun waveform(wave: Int, phase: Double): Double {
@@ -122,8 +142,8 @@ class Opl2Core(
             1 -> if (s > 0.0) s else 0.0 // half-sine
             2 -> kotlin.math.abs(s) // abs-sine
             3 -> { // pulse / quarter
-                val q = phase / (Math.PI * 2.0)
-                if (q < 0.25) kotlin.math.abs(s) else 0.0
+                val halfPhase = phase % Math.PI
+                if (halfPhase < Math.PI / 2) kotlin.math.abs(s) else 0.0
             }
             else -> s
         }
@@ -133,29 +153,51 @@ class Opl2Core(
         when (op.env) {
             EnvState.OFF -> Unit
             EnvState.ATTACK -> {
-                op.envLevel += ATTACK_RATE[op.attack]
-                if (op.envLevel >= 1.0) {
-                    op.envLevel = 1.0
+                op.attenuation *= op.attackFactor
+                if (op.attenuation <= 0.01) {
+                    op.attenuation = 0.0
                     op.env = EnvState.DECAY
                 }
             }
             EnvState.DECAY -> {
-                op.envLevel -= DECAY_RATE[op.decay]
-                val sustain = 1.0 - op.sustain / 15.0
-                if (op.envLevel <= sustain) {
-                    op.envLevel = sustain.coerceAtLeast(0.0)
+                op.attenuation += op.decayStep
+                if (op.attenuation >= op.sustainDb) {
+                    op.attenuation = op.sustainDb
                     op.env = if (op.egType) EnvState.SUSTAIN else EnvState.RELEASE
                 }
             }
-            EnvState.SUSTAIN -> Unit
+            EnvState.SUSTAIN -> if (!op.egType) op.env = EnvState.RELEASE
             EnvState.RELEASE -> {
-                op.envLevel -= RELEASE_RATE[op.release]
-                if (op.envLevel <= 0.0) {
-                    op.envLevel = 0.0
+                op.attenuation += op.releaseStep
+                if (op.attenuation >= 96.0) {
+                    op.attenuation = 96.0
                     op.env = EnvState.OFF
                 }
             }
         }
+    }
+
+    private fun refreshChannel(c: Int) {
+        val ch = chans[c]
+        ch.phaseInc = phaseIncrement(ch.fnum, ch.block)
+        val noteBit = if ((regs[0x08] and 0x40) != 0) 8 else 9
+        val keyCode = (ch.block shl 1) or ((ch.fnum ushr noteBit) and 1)
+        val kslBase = (KSL_DB[ch.fnum ushr 6] - 3.0 * (7 - ch.block)).coerceAtLeast(0.0)
+        for (slot in intArrayOf(SLOT_MOD[c], SLOT_CAR[c])) {
+            val op = ops[slot]
+            val rateOffset = if (op.ksr) keyCode else keyCode ushr 2
+            fun effectiveRate(rate: Int) = if (rate == 0) 0 else (rate * 4 + rateOffset).coerceAtMost(63)
+            op.attackFactor = attackFactors[effectiveRate(op.attack)]
+            op.decayStep = decaySteps[effectiveRate(op.decay)]
+            op.releaseStep = decaySteps[effectiveRate(op.release)]
+            op.sustainDb = if (op.sustain == 15) 93.0 else op.sustain * 3.0
+            val scale = when (op.ksl) { 1 -> 1.0; 2 -> 0.5; 3 -> 2.0; else -> 0.0 }
+            op.levelGain = Math.pow(10.0, -(op.tl * 0.75 + kslBase * scale) / 20.0)
+        }
+    }
+
+    private fun refreshOperator(slot: Int) {
+        refreshChannel(SLOT_CHANNEL[slot])
     }
 
     private fun phaseIncrement(fnum: Int, block: Int): Double {
@@ -173,24 +215,28 @@ class Opl2Core(
         op.egType = (v and 0x20) != 0
         op.vib = (v and 0x40) != 0
         op.am = (v and 0x80) != 0
+        refreshOperator(slot)
     }
 
     private fun updateOpKslTl(off: Int, v: Int) {
         val slot = opOffsetToSlot(off) ?: return
         ops[slot].tl = v and 0x3F
         ops[slot].ksl = (v ushr 6) and 3
+        refreshOperator(slot)
     }
 
     private fun updateOpAd(off: Int, v: Int) {
         val slot = opOffsetToSlot(off) ?: return
         ops[slot].attack = (v ushr 4) and 0x0F
         ops[slot].decay = v and 0x0F
+        refreshOperator(slot)
     }
 
     private fun updateOpSr(off: Int, v: Int) {
         val slot = opOffsetToSlot(off) ?: return
         ops[slot].sustain = (v ushr 4) and 0x0F
         ops[slot].release = v and 0x0F
+        refreshOperator(slot)
     }
 
     private fun updateOpWave(off: Int, v: Int) {
@@ -208,6 +254,7 @@ class Opl2Core(
         val prev = c.keyOn
         c.fnum = (c.fnum and 0xFF) or ((v and 0x03) shl 8)
         c.block = (v ushr 2) and 7
+        refreshChannel(ch)
         c.keyOn = (v and 0x20) != 0
         if (rhythm && ch >= 6) {
             // Melodic key-on on rhythm channels ignored when percussion active
@@ -231,11 +278,13 @@ class Opl2Core(
     }
 
     private fun keyOnPerc(ch: Int) {
+        if (chans[ch].keyOn) return
         chans[ch].keyOn = true
         // Ensure a default fnum if unset so percussion is audible
         if (chans[ch].fnum == 0) {
             chans[ch].fnum = 0x200
             chans[ch].block = 4
+            refreshChannel(ch)
         }
         keyOnOp(ops[SLOT_MOD[ch]])
         keyOnOp(ops[SLOT_CAR[ch]])
@@ -249,13 +298,10 @@ class Opl2Core(
 
     private fun keyOnOp(op: Operator) {
         op.phase = 0.0
-        op.env = EnvState.ATTACK
-        if (op.attack == 0x0F) {
-            op.envLevel = 1.0
-            op.env = EnvState.DECAY
-        } else {
-            op.envLevel = 0.0
-        }
+        op.prevOut = 0.0
+        op.prevOut2 = 0.0
+        op.attenuation = if (op.attackFactor == 0.0) 0.0 else 96.0
+        op.env = if (op.attackFactor == 0.0) EnvState.DECAY else EnvState.ATTACK
     }
 
     private fun keyOffOp(op: Operator) {
@@ -267,7 +313,12 @@ class Opl2Core(
         var prevOut = 0.0
         var prevOut2 = 0.0
         var env = EnvState.OFF
-        var envLevel = 0.0
+        var attenuation = 96.0
+        var attackFactor = 1.0
+        var decayStep = 0.0
+        var releaseStep = 0.0
+        var sustainDb = 0.0
+        var levelGain = 1.0
         var mult = 1
         var ksr = false
         var egType = false
@@ -283,6 +334,7 @@ class Opl2Core(
     }
 
     private class Channel {
+        var phaseInc = 0.0
         var fnum = 0
         var block = 0
         var keyOn = false
@@ -321,19 +373,25 @@ class Opl2Core(
             8.0, 9.0, 10.0, 10.0, 12.0, 12.0, 15.0, 15.0,
         )
 
-        private val FEEDBACK_SCALE = doubleArrayOf(
-            0.0, 0.5 / 16, 0.5 / 8, 0.5 / 4, 0.5 / 2, 0.5, 1.0, 2.0,
-        )
-
-        // Per-sample envelope steps (sampleRate ~22 kHz); rate 0 = slowest / silent attack
-        private val ATTACK_RATE = DoubleArray(16) { r ->
-            if (r == 0) 0.0 else if (r == 15) 1.0 else 0.0008 * (1 shl (r / 2))
+        private val SLOT_CHANNEL = intArrayOf(0, 1, 2, 0, 1, 2, 3, 4, 5, 3, 4, 5, 6, 7, 8, 6, 7, 8)
+        private val FEEDBACK_SCALE = doubleArrayOf(0.0, Math.PI / 128, Math.PI / 64,
+            Math.PI / 32, Math.PI / 16, Math.PI / 8, Math.PI / 4, Math.PI / 2)
+        private val KSL_DB = doubleArrayOf(0.0, 9.0, 12.0, 13.875, 15.0, 16.125,
+            16.875, 17.625, 18.0, 18.75, 19.125, 19.5, 19.875, 20.25, 20.625, 21.0)
+        private val ENVELOPE_GAIN = DoubleArray(1537) {
+            if (it == 1536) 0.0 else Math.pow(10.0, -(it / 16.0) / 20.0)
         }
-        private val DECAY_RATE = DoubleArray(16) { r ->
-            if (r == 0) 0.0 else 0.0002 * (1 shl (r / 2))
+        // Full attack time and 0?96 dB decay time, Yamaha table 3-6.
+        private val ATTACK_BASE_MS = doubleArrayOf(Double.POSITIVE_INFINITY,
+            2826.24, 1413.12, 706.56, 353.28, 176.64, 88.32, 44.16,
+            22.08, 11.04, 5.52, 2.76, 1.40, 0.70, 0.38, 0.0)
+        private val RATE_FRACTION = doubleArrayOf(1.0, 0.8, 2.0 / 3, 4.0 / 7)
+        private val ATTACK_MS = DoubleArray(64) {
+            ATTACK_BASE_MS[it ushr 2] * RATE_FRACTION[it and 3]
         }
-        private val RELEASE_RATE = DoubleArray(16) { r ->
-            if (r == 0) 0.0 else 0.0002 * (1 shl (r / 2))
+        private val DECAY_MS = DoubleArray(64) {
+            if (it < 4) Double.POSITIVE_INFINITY else if (it >= 60) 2.4
+            else 39280.64 / (1 shl ((it ushr 2) - 1)) * RATE_FRACTION[it and 3]
         }
     }
 }
