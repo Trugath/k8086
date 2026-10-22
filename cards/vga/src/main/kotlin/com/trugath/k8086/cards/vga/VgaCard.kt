@@ -18,8 +18,8 @@ import javax.imageio.ImageIO
 class VgaCardFactory : IsaCardFactory {
     override fun descriptor() = CardDescriptor(
         id = "com.trugath.k8086.cards.vga",
-        name = "VGA (Wolf3D-scoped)",
-        description = "Mode 03h text + Mode 13h / Mode Y VGA with C000 option ROM. " +
+        name = "VGA",
+        description = "Mode 03h text, mode 0Dh 320×200×16, and Mode 13h / Mode Y with a C000 option ROM. " +
             "Disable built-in CGA (--no-cga / SW1 special).",
         category = "Video",
         fields = listOf(
@@ -71,7 +71,7 @@ class VgaCard(
     private val exitOnClose: Boolean,
 ) : IsaCard {
     override val id = "com.trugath.k8086.cards.vga"
-    override val name = "VGA (text / Mode 13h / Mode Y)"
+    override val name = "VGA (text / mode 0Dh / Mode 13h)"
 
     val core = VgaCore()
     private var host: IsaHost? = null
@@ -155,6 +155,11 @@ class VgaCard(
                             writeBdaMode(0x13, columns = 40, pageSize = 0xFA00)
                         }
                     }
+                    core.biosMode == 0x0D -> {
+                        if ((h.cpuRead8(0x449) and 0xFF) != 0x0D) {
+                            writeBdaMode(0x0D, columns = 40, pageSize = 0x4000)
+                        }
+                    }
                     core.isTextMode() && (h.cpuRead8(0x44A) and 0xFF) == 0 -> {
                         writeBdaMode(core.biosMode and 0xFF, columns = 80, pageSize = 0x1000)
                     }
@@ -189,6 +194,10 @@ class VgaCard(
             0x13 -> {
                 core.setMode13h()
                 writeBdaMode(0x13, columns = 40, pageSize = 0xFA00)
+            }
+            0x0D -> {
+                core.setMode0Dh()
+                writeBdaMode(0x0D, columns = 40, pageSize = 0x4000)
             }
             0x00, 0x01, 0x02, 0x03, 0x07 -> {
                 core.setMode03h()

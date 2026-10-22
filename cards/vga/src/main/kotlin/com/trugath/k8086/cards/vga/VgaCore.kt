@@ -1,7 +1,7 @@
 package com.trugath.k8086.cards.vga
 
 /**
- * Minimal VGA state for text mode 03h, Mode 13h, and planar Mode Y.
+ * Minimal VGA state for text mode 03h, Mode 0Dh (320×200×16), Mode 13h, and planar Mode Y.
  */
 class VgaCore {
     val planes = Array(4) { ByteArray(PLANE_SIZE) }
@@ -95,6 +95,48 @@ class VgaCore {
             dac[i] = (c shl 16) or (c shl 8) or c
         }
         // Clear planar VRAM
+        for (p in 0 until 4) planes[p].fill(0)
+        latches.fill(0)
+        memWriteCount = 0
+        wm1WriteCount = 0
+        status3daReadCount = 0
+        status3daSawActive = false
+        status3daSawHBlank = false
+        status3daSawVSync = false
+    }
+
+    /**
+     * BIOS mode 0Dh: 320×200, 16 colors, four bit planes, 40 bytes per scanline.
+     * CPU address 0 is the visible page. A second page sits at offset 0x4000
+     * (segment A400), which is how the Bloodwych VGA driver double-buffers.
+     */
+    fun setMode0Dh() {
+        biosMode = 0x0D
+        seq[0] = 0x03
+        seq[1] = 0x01
+        seq[2] = 0x0F
+        seq[4] = 0x06 // extended memory, not odd/even, not chain-4
+        gc[0] = 0x00
+        gc[1] = 0x00
+        gc[3] = 0x00
+        gc[4] = 0x00
+        gc[5] = 0x00 // write mode 0, 16-color
+        gc[6] = 0x05 // graphics, map A0000
+        gc[7] = 0x0F
+        gc[8] = 0xFF
+        crtc[0x0C] = 0
+        crtc[0x0D] = 0
+        crtc[0x13] = 0x14 // 20 words = 40 bytes per scanline
+        crtc[0x11] = 0x8E
+        miscOutput = 0x63
+        for (i in 0 until 16) {
+            atc[i] = i
+            dac[i] = CGA_RGB[i]
+        }
+        atc[0x10] = 0x01
+        atc[0x11] = 0x00
+        atc[0x12] = 0x0F
+        atc[0x13] = 0x00
         for (p in 0 until 4) planes[p].fill(0)
         latches.fill(0)
         memWriteCount = 0
@@ -375,9 +417,13 @@ class VgaCore {
         }
     }
 
-    /** Compose 320×200 Mode 13h / Mode Y into ARGB ints. */
+    /** Compose 320×200 Mode 13h / Mode Y, or Mode 0Dh, into ARGB ints. */
     fun composeFrame(outRgb: IntArray) {
         require(outRgb.size >= 320 * 200)
+        if (biosMode == 0x0D) {
+            composeMode0Dh(outRgb)
+            return
+        }
         val start = startAddress()
         val pan = pelPan().coerceIn(0, 7)
         var di = 0
@@ -395,6 +441,47 @@ class VgaCore {
                 outRgb[di++] = dac[idx] or 0xFF000000.toInt()
             }
         }
+    }
+
+    /**
+     * Mode 0Dh framebuffer. Bit 7 of each plane byte is the leftmost pixel.
+     * Color bit 0 is plane 0. The attribute controller selects the DAC entry.
+     */
+    private fun composeMode0Dh(outRgb: IntArray) {
+        val pitch = mode0DhPitch()
+        val origin = startAddress()
+        var di = 0
+        for (y in 0 until 200) {
+            val row = origin + y * pitch
+            for (xb in 0 until 40) {
+                val addr = row + xb
+                val b0 = planeByte(0, addr)
+                val b1 = planeByte(1, addr)
+                val b2 = planeByte(2, addr)
+                val b3 = planeByte(3, addr)
+                var mask = 0x80
+                while (mask != 0) {
+                    var color = 0
+                    if ((b0 and mask) != 0) color = color or 1
+                    if ((b1 and mask) != 0) color = color or 2
+                    if ((b2 and mask) != 0) color = color or 4
+                    if ((b3 and mask) != 0) color = color or 8
+                    val dacIndex = atc[color] and 0xFF
+                    outRgb[di++] = dac[dacIndex] or 0xFF000000.toInt()
+                    mask = mask ushr 1
+                }
+            }
+        }
+    }
+
+    private fun mode0DhPitch(): Int {
+        val words = crtc[0x13] and 0xFF
+        return if (words == 0) 40 else words * 2
+    }
+
+    private fun planeByte(plane: Int, addr: Int): Int {
+        if (addr !in 0 until PLANE_SIZE) return 0
+        return planes[plane][addr].toInt() and 0xFF
     }
 
     /** Compose 80×25 text (8×8 glyphs) into 640×200 ARGB. */

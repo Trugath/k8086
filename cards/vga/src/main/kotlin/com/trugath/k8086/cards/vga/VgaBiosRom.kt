@@ -1,7 +1,7 @@
 package com.trugath.k8086.cards.vga
 
 /**
- * VGA option ROM at C000:0000 — INT 10h for modes 03h / 13h + teletype.
+ * VGA option ROM at C000:0000 — INT 10h for modes 03h / 0Dh / 13h, palette, and teletype.
  *
  * Soft ports (handled in [VgaCard]):
  * - [SOFT_MODE_PORT] (0x1CE): set video mode (AL)
@@ -69,8 +69,14 @@ object VgaBiosRom {
         a.emit(0xA2); a.emitWord(0x0449) // [449]=al
         a.emit(0x3C, 0x13)
         a.je("mode13_bda")
+        a.emit(0x3C, 0x0D)
+        a.je("mode0d_bda")
         a.emit(0xC7, 0x06); a.emitWord(0x044A); a.emitWord(80)
         a.emit(0xC7, 0x06); a.emitWord(0x044C); a.emitWord(0x1000)
+        a.jmp("mode_bda_done")
+        a.label("mode0d_bda")
+        a.emit(0xC7, 0x06); a.emitWord(0x044A); a.emitWord(40)
+        a.emit(0xC7, 0x06); a.emitWord(0x044C); a.emitWord(0x4000)
         a.jmp("mode_bda_done")
         a.label("mode13_bda")
         a.emit(0xC7, 0x06); a.emitWord(0x044A); a.emitWord(40)
@@ -146,11 +152,18 @@ object VgaBiosRom {
         a.emit(0xCF)
         a.label("not_12")
 
-        // AH=10h AL=01h — set overscan/border colour (BH) via ATC reg 11h
+        // AH=10h — palette. AL=01h overscan (BH), AL=02h all ATC regs (ES:DX, 17 bytes),
+        // AL=12h DAC block (BX=first, CX=count, ES:DX=RGB triples).
         a.emit(0x80, 0xFC, 0x10)
         a.jne("not_10")
         a.emit(0x3C, 0x01)
-        a.jne("not_10")
+        a.je("pal_border")
+        a.emit(0x3C, 0x02)
+        a.je("pal_all")
+        a.emit(0x3C, 0x12)
+        a.je("pal_dac")
+        a.emit(0xCF)
+        a.label("pal_border")
         a.emit(0x50, 0x52) // push ax, dx
         a.emit(0xBA); a.emitWord(0x03DA)
         a.emit(0xEC) // in al,dx — reset ATC flip-flop
@@ -160,6 +173,54 @@ object VgaBiosRom {
         a.emit(0x88, 0xF8) // mov al,bh
         a.emit(0xEE)
         a.emit(0x5A, 0x58)
+        a.emit(0xCF)
+        a.label("pal_all")
+        // DS:SI = table. Write ATC 0..15 then overscan (index 11h).
+        a.emit(0x1E, 0x56, 0x51, 0x53, 0x52) // push ds, si, cx, bx, dx
+        a.emit(0x89, 0xD6) // mov si, dx
+        a.emit(0x06, 0x1F) // push es; pop ds
+        a.emit(0xBA); a.emitWord(0x03DA)
+        a.emit(0xEC)
+        a.emit(0xBA); a.emitWord(0x03C0)
+        a.emit(0x31, 0xDB) // xor bx, bx
+        a.emit(0xB9); a.emitWord(16)
+        a.label("pal_all_loop")
+        a.emit(0x88, 0xD8) // mov al, bl
+        a.emit(0x0C, 0x20) // or al, 20h
+        a.emit(0xEE)
+        a.emit(0xAC) // lodsb
+        a.emit(0xEE)
+        a.emit(0x43) // inc bx
+        a.loop("pal_all_loop")
+        a.emit(0xB0, 0x31)
+        a.emit(0xEE)
+        a.emit(0xAC)
+        a.emit(0xEE)
+        a.emit(0xB0, 0x20)
+        a.emit(0xEE)
+        a.emit(0x5A, 0x5B, 0x59, 0x5E, 0x1F)
+        a.emit(0xCF)
+        a.label("pal_dac")
+        // 3C8 = BL, then CX*3 bytes from DS:SI to 3C9.
+        a.emit(0x1E, 0x56, 0x51, 0x52)
+        a.emit(0x89, 0xD6)
+        a.emit(0x06, 0x1F)
+        a.emit(0xBA); a.emitWord(0x03C8)
+        a.emit(0x88, 0xD8) // mov al, bl
+        a.emit(0xEE)
+        a.emit(0x42) // inc dx → 3C9
+        a.jcxz("pal_dac_done")
+        a.label("pal_dac_reg")
+        a.emit(0x51) // push cx
+        a.emit(0xB1, 0x03)
+        a.label("pal_dac_byte")
+        a.emit(0xAC)
+        a.emit(0xEE)
+        a.loop("pal_dac_byte")
+        a.emit(0x59) // pop cx
+        a.loop("pal_dac_reg")
+        a.label("pal_dac_done")
+        a.emit(0x5A, 0x59, 0x5E, 0x1F)
         a.emit(0xCF)
         a.label("not_10")
 
@@ -208,6 +269,16 @@ object VgaBiosRom {
 
         fun jmp(name: String) {
             emit(0xEB, 0x00)
+            fixups.add(Fixup(buf.size - 1, name))
+        }
+
+        fun loop(name: String) {
+            emit(0xE2, 0x00)
+            fixups.add(Fixup(buf.size - 1, name))
+        }
+
+        fun jcxz(name: String) {
+            emit(0xE3, 0x00)
             fixups.add(Fixup(buf.size - 1, name))
         }
 
