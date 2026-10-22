@@ -62,8 +62,10 @@ object VgaBiosRom {
         a.jne("not_00")
         a.emit(0x50, 0x52, 0x1E) // push ax,dx,ds
         a.emit(0xBA); a.emitWord(SOFT_MODE_PORT)
-        a.emit(0xEE) // out dx,al
+        a.emit(0xEE) // out dx,al — card switches; AL is still the mode
+        a.emit(0x50) // save mode across the DS setup
         a.emit(0x31, 0xC0, 0x8E, 0xD8)
+        a.emit(0x58) // pop ax (mode)
         a.emit(0xA2); a.emitWord(0x0449) // [449]=al
         a.emit(0x3C, 0x13)
         a.je("mode13_bda")
@@ -72,7 +74,7 @@ object VgaBiosRom {
         a.jmp("mode_bda_done")
         a.label("mode13_bda")
         a.emit(0xC7, 0x06); a.emitWord(0x044A); a.emitWord(40)
-        a.emit(0xC7, 0x06); a.emitWord(0x044C); a.emitWord(0x3E80)
+        a.emit(0xC7, 0x06); a.emitWord(0x044C); a.emitWord(0xFA00)
         a.label("mode_bda_done")
         a.emit(0xC7, 0x06); a.emitWord(0x0450); a.emitWord(0)
         a.emit(0x1F, 0x5A, 0x58)
