@@ -967,6 +967,8 @@ class Machine(
         val snapshotEvery = HostPlatform.getenv("K8086_MEM_SNAPSHOT_EVERY")?.toLongOrNull() ?: 10_000_000L
         val snapshotStart = HostPlatform.getenv("K8086_MEM_SNAPSHOT_START")?.toLongOrNull() ?: 0L
         var nextSnapshot = snapshotStart
+        val inputScript = HostPlatform.getenv("K8086_INPUT_SCRIPT")?.let { loadInputScript(it) } ?: emptyList()
+        var nextInput = 0
         try {
             while (instructionsExecuted < maxInstructions && !stopActive) {
                 if (pauseActive && !waitIfPaused()) break
@@ -985,6 +987,10 @@ class Machine(
                         lastDumpInsn = instructionsExecuted
                         dumpVgaPng(dumpDir, instructionsExecuted)
                     }
+                }
+                while (nextInput < inputScript.size && instructionsExecuted >= inputScript[nextInput].first) {
+                    for (code in inputScript[nextInput].second) enqueueScanCode(code)
+                    nextInput++
                 }
                 if (snapshotDir != null && instructionsExecuted >= nextSnapshot) {
                     writeMemorySnapshot(snapshotDir, instructionsExecuted)
@@ -1108,6 +1114,24 @@ class Machine(
         // PSP:0002 of current process if we can find a large owned Z/M block
         HostPlatform.stderr("MEM_DUMP: current PSP guess via large owned blocks above")
     }
+
+    /**
+     * Scripted keyboard input for headless runs (`K8086_INPUT_SCRIPT`). Each
+     * non-comment line is `<instruction count> <hex scan code>...`; the codes
+     * are queued, in order, once that many instructions have executed. Make
+     * codes press a key and make|80h releases it (XT set 1). `#` starts a
+     * comment. Lines are applied in instruction order.
+     */
+    private fun loadInputScript(path: String): List<Pair<Long, List<Int>>> =
+        HostPlatform.readBytes(path).decodeToString().lineSequence()
+            .map { it.substringBefore('#').trim() }
+            .filter { it.isNotEmpty() }
+            .map { line ->
+                val parts = line.split(Regex("\\s+"))
+                parts[0].toLong() to parts.drop(1).map { it.removePrefix("0x").toInt(16) and 0xFF }
+            }
+            .sortedBy { it.first }
+            .toList()
 
     /**
      * Optional raw memory snapshot when `K8086_MEM_SNAPSHOT_DIR` is set: writes
