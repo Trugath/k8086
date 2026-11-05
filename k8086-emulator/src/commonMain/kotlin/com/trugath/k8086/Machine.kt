@@ -963,6 +963,10 @@ class Machine(
         val expectEvery = options.cgaExpectEvery.coerceAtLeast(1L)
         val dumpDir = HostPlatform.getenv("K8086_VGA_DUMP_DIR")
         var lastDumpInsn = 0L
+        val snapshotDir = HostPlatform.getenv("K8086_MEM_SNAPSHOT_DIR")
+        val snapshotEvery = HostPlatform.getenv("K8086_MEM_SNAPSHOT_EVERY")?.toLongOrNull() ?: 10_000_000L
+        val snapshotStart = HostPlatform.getenv("K8086_MEM_SNAPSHOT_START")?.toLongOrNull() ?: 0L
+        var nextSnapshot = snapshotStart
         try {
             while (instructionsExecuted < maxInstructions && !stopActive) {
                 if (pauseActive && !waitIfPaused()) break
@@ -981,6 +985,10 @@ class Machine(
                         lastDumpInsn = instructionsExecuted
                         dumpVgaPng(dumpDir, instructionsExecuted)
                     }
+                }
+                if (snapshotDir != null && instructionsExecuted >= nextSnapshot) {
+                    writeMemorySnapshot(snapshotDir, instructionsExecuted)
+                    nextSnapshot = instructionsExecuted + snapshotEvery.coerceAtLeast(1L)
                 }
                 if (expect != null &&
                     instructionsExecuted % expectEvery == 0L &&
@@ -1011,6 +1019,9 @@ class Machine(
             }
             if (HostPlatform.getenv("K8086_MEM_DUMP") == "1") {
                 dumpConventionalMemoryArena()
+            }
+            if (snapshotDir != null) {
+                writeMemorySnapshot(snapshotDir, instructionsExecuted)
             }
             shutdown()
         }
@@ -1096,6 +1107,29 @@ class Machine(
         }
         // PSP:0002 of current process if we can find a large owned Z/M block
         HostPlatform.stderr("MEM_DUMP: current PSP guess via large owned blocks above")
+    }
+
+    /**
+     * Optional raw memory snapshot when `K8086_MEM_SNAPSHOT_DIR` is set: writes
+     * `mem_<insn>.bin` (first 1 MiB of physical memory) and `regs_<insn>.txt`
+     * (CS IP SS SP DS ES BP and the general registers, hex). Taken every
+     * `K8086_MEM_SNAPSHOT_EVERY` instructions (default 10M) from
+     * `K8086_MEM_SNAPSHOT_START`, and once at stop. For offline inspection of
+     * guest state by analysis tools.
+     */
+    private fun writeMemorySnapshot(dir: String, insn: Long) {
+        val size = 0x100000
+        val bytes = ByteArray(size) { i -> cpu.readPhysByte(i).toByte() }
+        val name = insn.toString().padStart(12, '0')
+        HostPlatform.writeBytes(HostPlatform.joinPath(dir, "mem_$name.bin"), bytes)
+        val regs = listOf(
+            "CS" to cpu.getReg16(REG_CS), "IP" to cpu.getIp(), "SS" to cpu.getReg16(REG_SS),
+            "SP" to cpu.getReg16(REG_SP), "DS" to cpu.getReg16(REG_DS), "ES" to cpu.getReg16(REG_ES),
+            "BP" to cpu.getReg16(REG_BP), "AX" to cpu.getReg16(REG_AX), "BX" to cpu.getReg16(REG_BX),
+            "CX" to cpu.getReg16(REG_CX), "DX" to cpu.getReg16(REG_DX), "SI" to cpu.getReg16(REG_SI),
+            "DI" to cpu.getReg16(REG_DI),
+        ).joinToString(" ") { (k, v) -> "$k=${hex4(v)}" }
+        HostPlatform.writeBytes(HostPlatform.joinPath(dir, "regs_$name.txt"), "insn=$insn $regs\n".encodeToByteArray())
     }
 
     /** Optional headless frame dump when `K8086_VGA_DUMP_DIR` is set. */

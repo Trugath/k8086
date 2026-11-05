@@ -10,6 +10,8 @@ internal expect object HostPlatform {
     fun getenv(name: String): String?
     fun isFile(path: String): Boolean
     fun readBytes(path: String): ByteArray
+    /** Write [data] to [path], creating parent directories where the host has them. */
+    fun writeBytes(path: String, data: ByteArray)
     fun absolutePath(path: String): String
     fun parentPath(path: String): String?
     fun joinPath(parent: String, child: String): String

@@ -25,6 +25,10 @@ internal actual object HostPlatform {
     actual fun readBytes(path: String): ByteArray =
         vfs[normalize(path)]?.copyOf() ?: error("File not mounted: $path")
 
+    actual fun writeBytes(path: String, data: ByteArray) {
+        vfs[normalize(path)] = data
+    }
+
     actual fun absolutePath(path: String): String = normalize(path)
 
     actual fun parentPath(path: String): String? {

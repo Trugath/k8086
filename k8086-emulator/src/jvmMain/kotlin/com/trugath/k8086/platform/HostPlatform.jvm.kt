@@ -21,6 +21,11 @@ internal actual object HostPlatform {
     actual fun getenv(name: String): String? = System.getenv(name)
     actual fun isFile(path: String): Boolean = File(path).isFile
     actual fun readBytes(path: String): ByteArray = File(path).readBytes()
+    actual fun writeBytes(path: String, data: ByteArray) {
+        val file = File(path)
+        file.parentFile?.mkdirs()
+        file.writeBytes(data)
+    }
     actual fun absolutePath(path: String): String = File(path).absolutePath
     actual fun parentPath(path: String): String? = File(path).parent
     actual fun joinPath(parent: String, child: String): String = File(parent, child).path
